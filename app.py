@@ -81,12 +81,20 @@ st.markdown("""
 if 'auth' not in st.session_state: st.session_state['auth'] = False
 if 'user' not in st.session_state: st.session_state['user'] = None
 
-# COMPOSANT : MODAL / CARTE D'INTERACTION PROFIL
+# COMPOSANT : MODAL / CARTE D'INTERACTION PROFIL (PROTECTION CONTRE TypeError)
 def display_profile_card(target_user_id):
+    if target_user_id is None or pd.isna(target_user_id):
+        return
+    
+    try:
+        valid_id = int(target_user_id)
+    except (ValueError, TypeError):
+        return
+
     df_target = run_query(
         "SELECT u.id, u.full_name, u.email, u.user_type, p.bio, p.trust_score "
         "FROM users u LEFT JOIN profiles p ON u.id = p.user_id WHERE u.id = %s",
-        (int(target_user_id),)
+        (valid_id,)
     )
     if df_target.empty:
         st.error("Profil non trouvé.")
@@ -103,22 +111,22 @@ def display_profile_card(target_user_id):
 
         with c_msg:
             st.markdown("##### ✉️ Envoyer un Message")
-            m_text = st.text_area("Message direct :", key=f"p_msg_{target_user_id}")
-            if st.button("Envoyer Message", key=f"btn_p_msg_{target_user_id}"):
+            m_text = st.text_area("Message direct :", key=f"p_msg_{valid_id}")
+            if st.button("Envoyer Message", key=f"btn_p_msg_{valid_id}"):
                 if m_text.strip():
                     if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", 
-                                  (st.session_state.user['id'], target_user_id, m_text)):
+                                  (st.session_state.user['id'], valid_id, m_text)):
                         st.success("Message transmis avec succès !")
                     else: st.error("Impossible d'envoyer le message.")
                 else: st.warning("Veuillez rédiger un texte.")
 
         with c_rate:
             st.markdown("##### ⭐ Laisser une Évaluation")
-            score = st.slider("Note sur 5", 1, 5, 5, key=f"p_rate_{target_user_id}")
-            avis = st.text_input("Commentaire / Avis :", key=f"p_comm_{target_user_id}")
-            if st.button("Soumettre la Note", key=f"btn_p_rate_{target_user_id}"):
+            score = st.slider("Note sur 5", 1, 5, 5, key=f"p_rate_{valid_id}")
+            avis = st.text_input("Commentaire / Avis :", key=f"p_comm_{valid_id}")
+            if st.button("Soumettre la Note", key=f"btn_p_rate_{valid_id}"):
                 if run_action("INSERT INTO reviews (evaluator_id, evaluated_id, rating, comment) VALUES (%s, %s, %s, %s)",
-                              (st.session_state.user['id'], target_user_id, score, avis)):
+                              (st.session_state.user['id'], valid_id, score, avis)):
                     st.success("Évaluation enregistrée !")
                 else: st.error("Erreur d'enregistrement.")
 
@@ -157,8 +165,8 @@ if not st.session_state['auth']:
 # --- SI KONEKTE : NAVIGATION & WORKSPACE ---
 with st.sidebar:
     if st.session_state.user:
-        st.markdown(f"### 👤 {st.session_state.user['full_name']}")
-        st.caption(f"Role: **{st.session_state.user['role']}** | {st.session_state.user['user_type']} (ID: {st.session_state.user['id']})")
+        st.markdown(f"### 👤 {st.session_state.user.get('full_name', 'Utilisateur')}")
+        st.caption(f"Role: **{st.session_state.user.get('role', 'USER')}** | {st.session_state.user.get('user_type', 'MEMBER')} (ID: {st.session_state.user.get('id', 0)})")
     
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.clear()
@@ -198,21 +206,58 @@ if menu == "🏠 Accueil":
     else:
         st.info("Aucune offre récente publiée.")
 
-# 2. TALENTS
+# 2. TALENTS (AVEC DESCRIPTION, ENVOI MESSAGE AK NOTE DIRECT)
 elif menu == "💎 Talents":
     st.title("💎 Réseau des Talents")
     search = st.text_input("🔍 Rechercher par nom ou compétence...", placeholder="Ex: Jean, Developer, Designer...")
     
-    df = run_query("SELECT * FROM vw_talents WHERE full_name ILIKE %s LIMIT 12", (f'%{search}%',))
+    df = run_query(
+        "SELECT t.*, p.bio FROM vw_talents t "
+        "LEFT JOIN profiles p ON (t.id = p.user_id OR t.user_id = p.user_id) "
+        "WHERE t.full_name ILIKE %s LIMIT 12", 
+        (f'%{search}%',)
+    )
     
     if not df.empty:
         cols = st.columns(3)
         for i, r in df.iterrows():
+            target_user_id = r.get('id') if pd.notnull(r.get('id')) else r.get('user_id')
+            bio_text = r.get('bio') if pd.notnull(r.get('bio')) and r.get('bio') else "Aucune description renseignée."
+            
             with cols[i % 3]:
-                st.markdown(f"<div class='card'><b>{r['full_name']}</b><br>Trust Score: ⭐ {r.get('trust_score', 50)}%</div>", unsafe_allow_html=True)
-                target_user_id = r.get('id') or r.get('user_id')
-                if st.button("👤 Voir Profil & Contacter", key=f"t_btn_{i}_{target_user_id}"):
-                    st.session_state["selected_profile"] = target_user_id
+                st.markdown(f"""
+                <div class='card'>
+                    <b>{r['full_name']}</b><br>
+                    <small>⭐ Trust Score: {r.get('trust_score', 50)}%</small><br><br>
+                    <p style='color: #475569; font-size: 0.9em;'>{bio_text[:120]}{'...' if len(bio_text) > 120 else ''}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if pd.notnull(target_user_id):
+                    with st.expander("💬 Messagerie & ⭐ Évaluation"):
+                        # Direct Message
+                        msg_input = st.text_area("Votre message:", key=f"t_msg_{target_user_id}_{i}", height=70)
+                        if st.button("Envoyer Message", key=f"t_smsg_{target_user_id}_{i}"):
+                            if msg_input.strip():
+                                if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", 
+                                              (st.session_state.user['id'], int(target_user_id), msg_input)):
+                                    st.success("Message envoyé !")
+                                else: st.error("Erreur d'envoi.")
+                            else: st.warning("Saisissez un message.")
+                        
+                        st.divider()
+                        
+                        # Direct Rating
+                        rate_val = st.selectbox("Note /5:", [5, 4, 3, 2, 1], key=f"t_rate_{target_user_id}_{i}")
+                        comm_val = st.text_input("Commentaire:", key=f"t_comm_{target_user_id}_{i}")
+                        if st.button("Soumettre la Note", key=f"t_srate_{target_user_id}_{i}"):
+                            if run_action("INSERT INTO reviews (evaluator_id, evaluated_id, rating, comment) VALUES (%s, %s, %s, %s)",
+                                          (st.session_state.user['id'], int(target_user_id), rate_val, comm_val)):
+                                st.success("Avis enregistré !")
+                            else: st.error("Erreur lors de la notation.")
+                            
+                    if st.button("👤 Profil Détaillé", key=f"t_btn_{i}_{target_user_id}"):
+                        st.session_state["selected_profile"] = target_user_id
     else:
         st.info("Aucun talent ne correspond à votre recherche.")
 
@@ -240,8 +285,8 @@ elif menu == "💼 Missions & Offres":
                         else:
                             st.warning("Vous avez déjà postulé ou une erreur s'est produite.")
                 with col_act2:
-                    client_id = r.get('client_id') or r.get('user_id')
-                    if client_id and st.button("👤 Contact Recruteur", key=f"rec_job_{r['id']}"):
+                    client_id = r.get('client_id') if pd.notnull(r.get('client_id')) else r.get('user_id')
+                    if pd.notnull(client_id) and st.button("👤 Contact Recruteur", key=f"rec_job_{r['id']}"):
                         st.session_state["selected_profile"] = client_id
                 st.divider()
         else:
@@ -280,7 +325,7 @@ elif menu == "📋 Candidatures":
                 col_info, col_p, col_acc, col_ref = st.columns([4, 2, 2, 2])
                 col_info.write(f"**{r['full_name']}** -> *{r['title']}*")
                 
-                if col_p.button("Profil", key=f"p_app_{r['app_id']}"):
+                if pd.notnull(r['applicant_id']) and col_p.button("Profil", key=f"p_app_{r['app_id']}"):
                     st.session_state["selected_profile"] = r['applicant_id']
                     
                 if col_acc.button("Accepter", key=f"acc_app_{r['app_id']}"):
@@ -328,7 +373,7 @@ elif menu == "📥 Messagerie":
     else:
         for _, m in msgs.iterrows():
             st.markdown(f"<div class='card'><b>De: {m['de']}</b><p>{m['content']}</p></div>", unsafe_allow_html=True)
-            if st.button(f"Répondre à {m['de']}", key=f"reply_{m['id']}"):
+            if pd.notnull(m['sender_id']) and st.button(f"Répondre à {m['de']}", key=f"reply_{m['id']}"):
                 st.session_state["selected_profile"] = m['sender_id']
 
 # 6. BI ANALYTICS
@@ -344,7 +389,7 @@ elif menu == "📊 BI Analytics":
 
 # 7. ADMINISTRATION (DBA)
 elif menu == "🛡️ Administration":
-    if st.session_state.user['role'] != 'ADMIN':
+    if st.session_state.user.get('role') != 'ADMIN':
         st.error("Accès strictement réservé aux Administrateurs et DBA.")
     else:
         st.title("🛡️ Panneau de Contrôle DBA")
@@ -364,7 +409,7 @@ elif menu == "🛡️ Administration":
         else:
             st.info("Aucun log d'audit disponible.")
 
-# ACCÈS PROFIL SÉLECTIONNÉ (PANEL FLOTTANT D'INTERACTION)
-if "selected_profile" in st.session_state:
+# ACCÈS PROFIL SÉLECTIONNÉ (SÉCURISÉ CONTRE LES ERREURS TYPEERROR)
+if "selected_profile" in st.session_state and st.session_state["selected_profile"] is not None:
     st.divider()
     display_profile_card(st.session_state["selected_profile"])
