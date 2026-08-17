@@ -5,7 +5,7 @@ import plotly.express as px
 import pandas as pd
 
 # =============================================================================
-# 1. CONFIGURATION PAGE
+# 1. CONFIGURATION PAGE & STYLES
 # =============================================================================
 st.set_page_config(
     page_title="NEKTA - Plateforme de Talents & Missions",
@@ -19,62 +19,90 @@ st.set_page_config(
 DB_URL = "postgres://neondb_owner:npg_oJVGs2F6gTlZ@ep-floral-salad-ayegzn7m-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 def get_db_connection():
-    return psycopg2.connect(DB_URL)
+    try:
+        return psycopg2.connect(DB_URL)
+    except Exception as e:
+        return None
 
 # Maintien de la session utilisateur
 if "user" not in st.session_state:
     st.session_state.user = None
 
 # =============================================================================
-# 3. SYSTÈME D'AUTHENTIFICATION (SÉCURISÉ AVEC BCRYPT / PGCRYPTO)
+# 3. SYSTÈME D'AUTHENTIFICATION AVEC ENCRYPTION (PGCRYPTO / CRYPT)
 # =============================================================================
 def login_user(email, password):
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    
-    query = """
-        SELECT id, full_name, email, role, user_type 
-        FROM users 
-        WHERE email = %s AND password_hash = crypt(%s, password_hash);
-    """
-    cur.execute(query, (email, password))
-    user = cur.fetchone()
-    
-    if user:
-        cur.execute("INSERT INTO login_logs (user_id) VALUES (%s);", (user['id'],))
-        conn.commit()
-    
-    cur.close()
-    conn.close()
-    return user
+    if not conn:
+        st.error("⚠️ Impossible de se connecter à la base de données Neon.")
+        return None
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        # Auth sécurisé avec la fonction crypt() de pgcrypto
+        query = """
+            SELECT id, full_name, email, role, user_type 
+            FROM users 
+            WHERE email = %s AND password_hash = crypt(%s, password_hash);
+        """
+        cur.execute(query, (email, password))
+        user = cur.fetchone()
+        
+        if user:
+            try:
+                cur.execute("INSERT INTO login_logs (user_id) VALUES (%s);", (user['id'],))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+        
+        cur.close()
+        conn.close()
+        return user
+    except Exception as e:
+        st.error(f"⚠️ Erreur lors de l'authentification : {e}")
+        conn.close()
+        return None
 
 def logout_user():
     st.session_state.user = None
     st.rerun()
 
-# Sidebar - Connexion / Déconnexion
-st.sidebar.title("🔐 Authentification")
+# =============================================================================
+# 4. ÉCRAN DE VERROUILLAGE / LOGIN OBLIGATOIRE
+# =============================================================================
 if st.session_state.user is None:
-    st.sidebar.subheader("Se connecter")
-    email_input = st.sidebar.text_input("Email")
-    password_input = st.sidebar.text_input("Mot de passe", type="password")
-    if st.sidebar.button("Connexion"):
-        auth_user = login_user(email_input, password_input)
-        if auth_user:
-            st.session_state.user = auth_user
-            st.sidebar.success(f"Bienvenue {auth_user['full_name']}!")
-            st.rerun()
-        else:
-            st.sidebar.error("Email ou mot de passe incorrect.")
-else:
-    st.sidebar.write(f"👤 **{st.session_state.user['full_name']}**")
-    st.sidebar.caption(f"Rôle: {st.session_state.user['role']} | Type: {st.session_state.user['user_type']}")
-    if st.sidebar.button("Déconnexion"):
-        logout_user()
+    st.title("🔐 Connexion requise - NEKTA System")
+    st.info("Veuillez vous authentifier pour accéder à la plateforme. Les mots de passe sont chiffrés via pgcrypto.")
+    
+    col_login, _ = st.columns([1, 1])
+    with col_login:
+        email_input = st.text_input("Adresse Email")
+        password_input = st.text_input("Mot de passe", type="password")
+        if st.button("Se connecter", type="primary"):
+            if email_input and password_input:
+                auth_user = login_user(email_input, password_input)
+                if auth_user:
+                    st.session_state.user = auth_user
+                    st.success(f"Bienvenue {auth_user['full_name']}!")
+                    st.rerun()
+                else:
+                    st.error("Identifiants incorrects ou utilisateur non trouvé.")
+            else:
+                st.warning("Veuillez remplir tous les champs.")
+    st.stop() # Bloke tout rès kòd la nèt si moun lan pa konekte!
+
+# =============================================================================
+# 5. APPLICATION PRINCIPALE (SÈLMAN POU MOUN KI KONEKTE)
+# =============================================================================
+
+# Sidebar Navigation ak bouton Déconnexion
+st.sidebar.title("💼 NEKTA Platform")
+st.sidebar.write(f"👤 **{st.session_state.user['full_name']}**")
+st.sidebar.caption(f"Rôle: {st.session_state.user['role']} | Type: {st.session_state.user['user_type']}")
+if st.sidebar.button("Déconnexion"):
+    logout_user()
 
 st.sidebar.markdown("---")
 
-# Navigation Principale
 menu = [
     "🏠 Accueil", 
     "👥 Talents", 
@@ -89,9 +117,9 @@ menu = [
 ]
 choice = st.sidebar.radio("Navigation", menu)
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # PAJ 1: 🏠 ACCUEIL
-# =============================================================================
+# -----------------------------------------------------------------------------
 if choice == "🏠 Accueil":
     st.markdown("""
         <div style="background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%); padding: 35px; border-radius: 12px; color: white; text-align: center;">
@@ -99,48 +127,59 @@ if choice == "🏠 Accueil":
             <p style="font-size: 1.2em;">La plateforme haïtienne de mise en relation entre étudiants, professionnels et entreprises.</p>
         </div>
     """, unsafe_allow_html=True)
-    
     st.write("")
     
     conn = get_db_connection()
-    cur = conn.cursor()
-    
-    cur.execute("SELECT COUNT(*) FROM users WHERE user_type IN ('STUDENT', 'PROFESSIONAL');")
-    total_talents = cur.fetchone()[0]
-    
-    cur.execute("SELECT COUNT(*) FROM jobs WHERE status = 'OPEN';")
-    total_jobs = cur.fetchone()[0]
-    
-    cur.execute("SELECT COUNT(*) FROM applications;")
-    total_apps = cur.fetchone()[0]
-    
-    cur.execute("SELECT COUNT(*) FROM messages;")
-    total_msgs = cur.fetchone()[0]
-    
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Talents Inscrits", total_talents)
-    col2.metric("Missions Ouvertes", total_jobs)
-    col3.metric("Candidatures Soumises", total_apps)
-    col4.metric("Messages Échangés", total_msgs)
-    
-    st.markdown("---")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("🌟 Top Talents (Trust Score Élevé)")
-        df_talents = pd.read_sql("SELECT full_name, user_type, trust_score FROM vw_talents ORDER BY trust_score DESC LIMIT 5;", conn)
-        st.dataframe(df_talents, use_container_width=True)
-        
-    with c2:
-        st.subheader("🔥 Dernières Offres De Mission")
-        df_jobs = pd.read_sql("SELECT title, budget, client_name, created_at FROM vw_jobs_ouverts ORDER BY created_at DESC LIMIT 5;", conn)
-        st.dataframe(df_jobs, use_container_width=True)
-        
-    conn.close()
+    if conn:
+        try:
+            cur = conn.cursor()
+            
+            def get_count(query):
+                try:
+                    cur.execute(query)
+                    return cur.fetchone()[0]
+                except Exception:
+                    conn.rollback()
+                    return 0
 
-# =============================================================================
+            total_talents = get_count("SELECT COUNT(*) FROM users WHERE user_type IN ('STUDENT', 'PROFESSIONAL');")
+            total_jobs = get_count("SELECT COUNT(*) FROM jobs WHERE status = 'OPEN';")
+            total_apps = get_count("SELECT COUNT(*) FROM applications;")
+            total_msgs = get_count("SELECT COUNT(*) FROM messages;")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Talents Inscrits", total_talents)
+            col2.metric("Missions Ouvertes", total_jobs)
+            col3.metric("Candidatures Soumises", total_apps)
+            col4.metric("Messages Échangés", total_msgs)
+            
+            st.markdown("---")
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("🌟 Top Talents")
+                try:
+                    df_talents = pd.read_sql("SELECT full_name, user_type, trust_score FROM vw_talents ORDER BY trust_score DESC LIMIT 5;", conn)
+                    st.dataframe(df_talents, use_container_width=True)
+                except Exception:
+                    conn.rollback()
+                    st.info("Information indisponible (vue `vw_talents` manquante).")
+                
+            with c2:
+                st.subheader("🔥 Dernières Offres De Mission")
+                try:
+                    df_jobs = pd.read_sql("SELECT title, budget, client_name, created_at FROM vw_jobs_ouverts ORDER BY created_at DESC LIMIT 5;", conn)
+                    st.dataframe(df_jobs, use_container_width=True)
+                except Exception:
+                    conn.rollback()
+                    st.info("Information indisponible (vue `vw_jobs_ouverts` manquante).")
+            conn.close()
+        except Exception:
+            st.warning("Impossible d'extraire les données d'accueil.")
+
+# -----------------------------------------------------------------------------
 # PAJ 2: 👥 TALENTS
-# =============================================================================
+# -----------------------------------------------------------------------------
 elif choice == "👥 Talents":
     st.title("👥 Annuaire des Talents")
     
@@ -154,71 +193,70 @@ elif choice == "👥 Talents":
     offset = (page_number - 1) * page_size
     
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    
-    query = """
-        SELECT user_id, full_name, user_type, bio, trust_score 
-        FROM vw_talents 
-        WHERE trust_score >= %s AND full_name ILIKE %s
-    """
-    params = [min_trust, f"%{search_name}%"]
-    
-    if search_type != "Tous":
-        query += " AND user_type = %s"
-        params.append(search_type)
-        
-    query += " ORDER BY trust_score DESC LIMIT %s OFFSET %s;"
-    params.extend([page_size, offset])
-    
-    cur.execute(query, tuple(params))
-    talents = cur.fetchall()
-    conn.close()
-    
-    for t in talents:
-        with st.container():
-            st.markdown(f"### {t['full_name']} `({t['user_type']})`")
-            st.caption(f"⭐ **Trust Score:** {t['trust_score']}/100")
-            st.write(t['bio'] or "Aucune biographie fournie.")
-            if st.button(f"Contacter {t['full_name']}", key=f"btn_contact_{t['user_id']}"):
-                st.info("Rendez-vous dans l'onglet **Messagerie** pour envoyer un message.")
-            st.markdown("---")
-
-# =============================================================================
-# PAJ 3: 👤 MON PROFIL
-# =============================================================================
-elif choice == "👤 Mon Profil":
-    if not st.session_state.user:
-        st.warning("Veuillez vous connecter pour voir votre profil.")
-    else:
-        u_id = st.session_state.user['id']
-        st.title("👤 Mon Profil Personnel")
-        
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        cur.execute("SELECT u.full_name, u.email, p.bio, p.trust_score FROM users u JOIN profiles p ON u.id = p.user_id WHERE u.id = %s;", (u_id,))
-        profile = cur.fetchone()
-        
-        col_prof1, col_prof2 = st.columns([1, 2])
-        with col_prof1:
-            st.metric("Trust Score", f"{profile['trust_score']}/100")
-            st.file_uploader("Upload Foto (JPG/PNG)", type=["jpg", "png"])
-            st.file_uploader("Téléverser CV (PDF)", type=["pdf"])
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            query = "SELECT user_id, full_name, user_type, bio, trust_score FROM vw_talents WHERE trust_score >= %s AND full_name ILIKE %s"
+            params = [min_trust, f"%{search_name}%"]
             
-        with col_prof2:
-            new_name = st.text_input("Nom Complet", value=profile['full_name'])
-            new_bio = st.text_area("Ma Bio / Compétences", value=profile['bio'] or "")
-            if st.button("Mettre à jour le profil"):
-                cur.execute("UPDATE users SET full_name = %s WHERE id = %s;", (new_name, u_id))
-                cur.execute("UPDATE profiles SET bio = %s, updated_at = NOW() WHERE user_id = %s;", (new_bio, u_id))
-                conn.commit()
-                st.success("Profil mis à jour avec succès!")
+            if search_type != "Tous":
+                query += " AND user_type = %s"
+                params.append(search_type)
                 
-        conn.close()
+            query += " ORDER BY trust_score DESC LIMIT %s OFFSET %s;"
+            params.extend([page_size, offset])
+            
+            cur.execute(query, tuple(params))
+            talents = cur.fetchall()
+            conn.close()
+            
+            if talents:
+                for t in talents:
+                    with st.container():
+                        st.markdown(f"### {t['full_name']} `({t['user_type']})`")
+                        st.caption(f"⭐ **Trust Score:** {t['trust_score']}/100")
+                        st.write(t['bio'] or "Aucune biographie fournie.")
+                        st.markdown("---")
+            else:
+                st.info("Aucun talent trouvé.")
+        except Exception:
+            st.warning("⚠️ Impossible de lire les talents. Vérifiez si la vue `vw_talents` existe dans Neon DB.")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+# PAJ 3: 👤 MON PROFIL
+# -----------------------------------------------------------------------------
+elif choice == "👤 Mon Profil":
+    u_id = st.session_state.user['id']
+    st.title("👤 Mon Profil Personnel")
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT u.full_name, u.email, p.bio, p.trust_score FROM users u LEFT JOIN profiles p ON u.id = p.user_id WHERE u.id = %s;", (u_id,))
+            profile = cur.fetchone()
+            
+            col_prof1, col_prof2 = st.columns([1, 2])
+            with col_prof1:
+                st.metric("Trust Score", f"{profile['trust_score'] if profile and profile.get('trust_score') else 0}/100")
+                st.file_uploader("Upload Foto (JPG/PNG)", type=["jpg", "png"])
+                st.file_uploader("Téléverser CV (PDF)", type=["pdf"])
+                
+            with col_prof2:
+                new_name = st.text_input("Nom Complet", value=profile['full_name'] if profile else "")
+                new_bio = st.text_area("Ma Bio / Compétences", value=profile['bio'] if profile and profile.get('bio') else "")
+                if st.button("Mettre à jour le profil"):
+                    cur.execute("UPDATE users SET full_name = %s WHERE id = %s;", (new_name, u_id))
+                    cur.execute("INSERT INTO profiles (user_id, bio, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (user_id) DO UPDATE SET bio = EXCLUDED.bio, updated_at = NOW();", (u_id, new_bio))
+                    conn.commit()
+                    st.success("Profil mis à jour avec succès!")
+            conn.close()
+        except Exception as e:
+            st.warning(f"⚠️ Erreur lors du chargement du profil: {e}")
+
+# -----------------------------------------------------------------------------
 # PAJ 4: 🎯 MISSIONS
-# =============================================================================
+# -----------------------------------------------------------------------------
 elif choice == "🎯 Missions":
     st.title("🎯 Offres de Missions Disponibles")
     
@@ -227,230 +265,215 @@ elif choice == "🎯 Missions":
     search_title = col_f2.text_input("Mot clé (titre/description)")
     
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    
-    query = """
-        SELECT id, client_id, title, description, budget, client_name, created_at 
-        FROM vw_jobs_ouverts 
-        WHERE budget >= %s AND (title ILIKE %s OR description ILIKE %s)
-        ORDER BY created_at DESC LIMIT 20;
-    """
-    cur.execute(query, (min_budget, f"%{search_title}%", f"%{search_title}%"))
-    jobs = cur.fetchall()
-    
-    for j in jobs:
-        with st.expander(f"📌 {j['title']} — ${j['budget']}"):
-            st.write(f"**Client:** {j['client_name']}")
-            st.write(j['description'])
-            if st.session_state.user:
-                if st.button("Postuler à cette mission", key=f"app_{j['id']}"):
-                    try:
-                        cur.execute("""
-                            INSERT INTO applications (job_id, professional_id, applicant_id) 
-                            VALUES (%s, %s, %s);
-                        """, (j['id'], st.session_state.user['id'], st.session_state.user['id']))
-                        conn.commit()
-                        st.success("Candidature envoyée !")
-                    except Exception:
-                        conn.rollback()
-                        st.error("Vous avez déjà postulé à cette offre.")
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            query = """
+                SELECT id, client_id, title, description, budget, client_name, created_at 
+                FROM vw_jobs_ouverts 
+                WHERE budget >= %s AND (title ILIKE %s OR description ILIKE %s)
+                ORDER BY created_at DESC LIMIT 20;
+            """
+            cur.execute(query, (min_budget, f"%{search_title}%", f"%{search_title}%"))
+            jobs = cur.fetchall()
+            
+            if jobs:
+                for j in jobs:
+                    with st.expander(f"📌 {j['title']} — ${j['budget']}"):
+                        st.write(f"**Client:** {j['client_name']}")
+                        st.write(j['description'])
+                        if st.button("Postuler à cette mission", key=f"app_{j['id']}"):
+                            try:
+                                cur.execute("INSERT INTO applications (job_id, professional_id, applicant_id) VALUES (%s, %s, %s);", (j['id'], st.session_state.user['id'], st.session_state.user['id']))
+                                conn.commit()
+                                st.success("Candidature envoyée !")
+                            except Exception:
+                                conn.rollback()
+                                st.error("Erreur lors de la postulation ou vous avez déjà postulé.")
             else:
-                st.info("Connectez-vous pour postuler.")
-    conn.close()
+                st.info("Aucune mission ouverte.")
+            conn.close()
+        except Exception:
+            st.warning("⚠️ La vue `vw_jobs_ouverts` n'existe pas ou contient une erreur de colonne dans la base Neon DB.")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # PAJ 5: ➕ PUBLIER
-# =============================================================================
+# -----------------------------------------------------------------------------
 elif choice == "➕ Publier":
-    if not st.session_state.user:
-        st.warning("Veuillez vous connecter pour publier.")
-    else:
-        st.title("➕ Publier du Contenu")
-        pub_type = st.radio("Que voulez-vous publier ?", ["Nouvelle Mission", "Nouvel Événement / Formation"])
-        
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        if pub_type == "Nouvelle Mission":
-            title = st.text_input("Titre de la mission")
-            description = st.text_area("Description détaillée")
-            budget = st.number_input("Budget ($)", min_value=10.0, step=10.0)
-            
-            if st.button("Publier la mission"):
-                cur.execute("""
-                    INSERT INTO jobs (client_id, user_id, title, description, budget) 
-                    VALUES (%s, %s, %s, %s, %s);
-                """, (st.session_state.user['id'], st.session_state.user['id'], title, description, budget))
-                conn.commit()
-                st.success("Mission publiée avec succès!")
+    st.title("➕ Publier du Contenu")
+    pub_type = st.radio("Que voulez-vous publier ?", ["Nouvelle Mission", "Nouvel Événement / Formation"])
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            if pub_type == "Nouvelle Mission":
+                title = st.text_input("Titre de la mission")
+                description = st.text_area("Description détaillée")
+                budget = st.number_input("Budget ($)", min_value=10.0, step=10.0)
                 
-        else:
-            ev_title = st.text_input("Titre de l'événement / formation")
-            ev_desc = st.text_area("Description")
-            ev_type = st.selectbox("Type", ["FORMATION", "WORKSHOP", "NETWORKING"])
-            ev_date = st.date_input("Date")
-            
-            if st.button("Publier l'événement"):
-                cur.execute("""
-                    INSERT INTO events (title, description, event_type, event_date) 
-                    VALUES (%s, %s, %s, %s);
-                """, (ev_title, ev_desc, ev_type, ev_date))
-                conn.commit()
-                st.success("Événement enregistré!")
-                
-        conn.close()
-
-# =============================================================================
-# PAJ 6: 📑 CANDIDATURES
-# =============================================================================
-elif choice == "📑 Candidatures":
-    if not st.session_state.user:
-        st.warning("Veuillez vous connecter pour gérer les candidatures.")
-    else:
-        u_id = st.session_state.user['id']
-        st.title("📑 Gestion des Candidatures")
-        
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        tab1, tab2 = st.tabs(["Mes Candidatures Soumises", "Candidatures Reçues sur Mes Offres"])
-        
-        with tab1:
-            cur.execute("""
-                SELECT a.id, j.title, a.status, a.applied_at 
-                FROM applications a 
-                JOIN jobs j ON a.job_id = j.id 
-                WHERE a.professional_id = %s;
-            """, (u_id,))
-            my_apps = cur.fetchall()
-            st.dataframe(pd.DataFrame(my_apps), use_container_width=True)
-            
-        with tab2:
-            cur.execute("""
-                SELECT a.id AS app_id, j.title, u.full_name AS candidat, a.status 
-                FROM applications a 
-                JOIN jobs j ON a.job_id = j.id 
-                JOIN users u ON a.professional_id = u.id 
-                WHERE j.client_id = %s;
-            """, (u_id,))
-            received_apps = cur.fetchall()
-            
-            for ra in received_apps:
-                c_a1, c_a2, c_a3 = st.columns([3, 1, 1])
-                c_a1.write(f"**{ra['candidat']}** sur *{ra['title']}* (`{ra['status']}`)")
-                if ra['status'] == 'PENDING':
-                    if c_a2.button("Accepter", key=f"acc_{ra['app_id']}"):
-                        cur.execute("CALL sp_accepter_candidature(%s);", (ra['app_id'],))
-                        conn.commit()
-                        st.rerun()
-                    if c_a3.button("Refuser", key=f"ref_{ra['app_id']}"):
-                        cur.execute("UPDATE applications SET status='REJECTED' WHERE id=%s;", (ra['app_id'],))
-                        conn.commit()
-                        st.rerun()
-        conn.close()
-
-# =============================================================================
-# PAJ 7: 💬 MESSAGERIE
-# =============================================================================
-elif choice == "💬 Messagerie":
-    if not st.session_state.user:
-        st.warning("Veuillez vous connecter pour accéder à vos messages.")
-    else:
-        u_id = st.session_state.user['id']
-        st.title("💬 Messagerie Intégrée")
-        
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        cur.execute("SELECT id, full_name FROM users WHERE id <> %s ORDER BY full_name LIMIT 50;", (u_id,))
-        users_list = cur.fetchall()
-        recipient_map = {u['full_name']: u['id'] for u in users_list}
-        
-        if recipient_map:
-            selected_recipient = st.selectbox("Sélectionner un destinataire", list(recipient_map.keys()))
-            dest_id = recipient_map[selected_recipient]
-            
-            cur.execute("""
-                SELECT sender_id, content, sent_at 
-                FROM messages 
-                WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s)
-                ORDER BY sent_at ASC;
-            """, (u_id, dest_id, dest_id, u_id))
-            messages_chat = cur.fetchall()
-            
-            for m in messages_chat:
-                sender_label = "Moi" if m['sender_id'] == u_id else selected_recipient
-                st.text(f"[{m['sent_at'].strftime('%H:%M')}] {sender_label}: {m['content']}")
-                
-            msg_text = st.text_input("Votre message...")
-            if st.button("Envoyer Message"):
-                if msg_text.strip():
-                    cur.execute("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s);", (u_id, dest_id, msg_text))
+                if st.button("Publier la mission"):
+                    cur.execute("INSERT INTO jobs (client_id, user_id, title, description, budget) VALUES (%s, %s, %s, %s, %s);", (st.session_state.user['id'], st.session_state.user['id'], title, description, budget))
                     conn.commit()
-                    st.rerun()
-        else:
-            st.info("Aucun utilisateur disponible pour discuter.")
-        conn.close()
+                    st.success("Mission publiée avec succès!")
+            else:
+                ev_title = st.text_input("Titre de l'événement / formation")
+                ev_desc = st.text_area("Description")
+                ev_type = st.selectbox("Type", ["FORMATION", "WORKSHOP", "NETWORKING"])
+                ev_date = st.date_input("Date")
+                
+                if st.button("Publier l'événement"):
+                    cur.execute("INSERT INTO events (title, description, event_type, event_date) VALUES (%s, %s, %s, %s);", (ev_title, ev_desc, ev_type, ev_date))
+                    conn.commit()
+                    st.success("Événement enregistré!")
+            conn.close()
+        except Exception as e:
+            st.warning(f"⚠️ Impossible d'enregistrer l'élément: {e}")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
+# PAJ 6: 📑 CANDIDATURES
+# -----------------------------------------------------------------------------
+elif choice == "📑 Candidatures":
+    u_id = st.session_state.user['id']
+    st.title("📑 Gestion des Candidatures")
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            tab1, tab2 = st.tabs(["Mes Candidatures Soumises", "Candidatures Reçues sur Mes Offres"])
+            
+            with tab1:
+                try:
+                    cur.execute("SELECT a.id, j.title, a.status, a.applied_at FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s;", (u_id,))
+                    my_apps = cur.fetchall()
+                    st.dataframe(pd.DataFrame(my_apps), use_container_width=True)
+                except Exception:
+                    conn.rollback()
+                    st.info("Aucune candidature soumise.")
+                
+            with tab2:
+                try:
+                    cur.execute("SELECT a.id AS app_id, j.title, u.full_name AS candidat, a.status FROM applications a JOIN jobs j ON a.job_id = j.id JOIN users u ON a.professional_id = u.id WHERE j.client_id = %s;", (u_id,))
+                    received_apps = cur.fetchall()
+                    for ra in received_apps:
+                        c_a1, c_a2 = st.columns([3, 1])
+                        c_a1.write(f"**{ra['candidat']}** sur *{ra['title']}* (`{ra['status']}`)")
+                except Exception:
+                    conn.rollback()
+                    st.info("Aucune candidature reçue.")
+            conn.close()
+        except Exception as e:
+            st.warning("⚠️ Problème de chargement des candidatures.")
+
+# -----------------------------------------------------------------------------
+# PAJ 7: 💬 MESSAGERIE
+# -----------------------------------------------------------------------------
+elif choice == "💬 Messagerie":
+    u_id = st.session_state.user['id']
+    st.title("💬 Messagerie Intégrée")
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT id, full_name FROM users WHERE id <> %s ORDER BY full_name LIMIT 50;", (u_id,))
+            users_list = cur.fetchall()
+            recipient_map = {u['full_name']: u['id'] for u in users_list}
+            
+            if recipient_map:
+                selected_recipient = st.selectbox("Sélectionner un destinataire", list(recipient_map.keys()))
+                dest_id = recipient_map[selected_recipient]
+                
+                cur.execute("SELECT sender_id, content, sent_at FROM messages WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s) ORDER BY sent_at ASC;", (u_id, dest_id, dest_id, u_id))
+                messages_chat = cur.fetchall()
+                
+                for m in messages_chat:
+                    sender_label = "Moi" if m['sender_id'] == u_id else selected_recipient
+                    st.text(f"[{m['sent_at'].strftime('%H:%M') if m.get('sent_at') else ''}] {sender_label}: {m['content']}")
+                    
+                msg_text = st.text_input("Votre message...")
+                if st.button("Envoyer Message"):
+                    if msg_text.strip():
+                        cur.execute("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s);", (u_id, dest_id, msg_text))
+                        conn.commit()
+                        st.rerun()
+            else:
+                st.info("Aucun utilisateur disponible pour discuter.")
+            conn.close()
+        except Exception as e:
+            st.warning("⚠️ Table `messages` absente ou inaccessible.")
+
+# -----------------------------------------------------------------------------
 # PAJ 8: 📅 ÉVÉNEMENTS & FORMATIONS
-# =============================================================================
+# -----------------------------------------------------------------------------
 elif choice == "📅 Événements & Formations":
     st.title("📅 Formations & Événements à venir")
     
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM events ORDER BY event_date ASC;")
-    events = cur.fetchall()
-    conn.close()
-    
-    for e in events:
-        st.subheader(f"[{e['event_type']}] {e['title']}")
-        st.caption(f"📅 Date: {e['event_date']} | Lieu: {e['location']}")
-        st.write(e['description'])
-        if st.button("S'inscrire à l'événement", key=f"ev_{e['id']}"):
-            if st.session_state.user:
-                st.success("Inscription enregistrée!")
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT * FROM events ORDER BY event_date ASC;")
+            events = cur.fetchall()
+            conn.close()
+            
+            if events:
+                for e in events:
+                    st.subheader(f"[{e.get('event_type', 'EVENT')}] {e.get('title', 'Sans titre')}")
+                    st.caption(f"📅 Date: {e.get('event_date', '')} | Lieu: {e.get('location', 'N/A')}")
+                    st.write(e.get('description', ''))
+                    st.markdown("---")
             else:
-                st.error("Veuillez vous connecter pour vous inscrire.")
-        st.markdown("---")
+                st.info("Aucun événement répertorié pour le moment.")
+        except Exception:
+            st.warning("⚠️ La table `events` n'existe pas encore dans la base Neon DB.")
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # PAJ 9: 📊 STATISTIQUES (PLOTLY EXCLUSIF)
-# =============================================================================
+# -----------------------------------------------------------------------------
 elif choice == "📊 Statistiques":
-    st.title("📊 Tableaux de Bord analytiques (Plotly)")
+    st.title("📊 Tableaux de Bord analytiques")
     
     conn = get_db_connection()
-    
-    df_users = pd.read_sql("SELECT user_type, COUNT(*) as count FROM users GROUP BY user_type;", conn)
-    fig_users = px.pie(df_users, values='count', names='user_type', title="Répartition des Utilisateurs par Catégorie", hole=0.4)
-    st.plotly_chart(fig_users, use_container_width=True)
-    
-    df_scores = pd.read_sql("SELECT trust_score FROM profiles;", conn)
-    fig_scores = px.histogram(df_scores, x='trust_score', nbins=20, title="Distribution des Trust Scores", color_discrete_sequence=['#2a5298'])
-    st.plotly_chart(fig_scores, use_container_width=True)
-    
-    conn.close()
+    if conn:
+        try:
+            df_users = pd.read_sql("SELECT user_type, COUNT(*) as count FROM users GROUP BY user_type;", conn)
+            fig_users = px.pie(df_users, values='count', names='user_type', title="Répartition des Utilisateurs par Catégorie", hole=0.4)
+            st.plotly_chart(fig_users, use_container_width=True)
+        except Exception:
+            st.warning("Impossible d'afficher le graphique des utilisateurs.")
+            
+        try:
+            df_scores = pd.read_sql("SELECT trust_score FROM profiles;", conn)
+            fig_scores = px.histogram(df_scores, x='trust_score', nbins=20, title="Distribution des Trust Scores", color_discrete_sequence=['#2a5298'])
+            st.plotly_chart(fig_scores, use_container_width=True)
+        except Exception:
+            st.warning("Impossible d'afficher le graphique des Trust Scores (table `profiles` manquante).")
+            
+        conn.close()
 
-# =============================================================================
+# -----------------------------------------------------------------------------
 # PAJ 10: ⚙️ ADMINISTRATION DBA
-# =============================================================================
+# -----------------------------------------------------------------------------
 elif choice == "⚙️ Administration DBA":
-    if not st.session_state.user or st.session_state.user['role'] != 'ADMIN':
-        st.error("⛔ Accès refusé. Cette section est réservée aux administrateurs de la base de données.")
+    if st.session_state.user.get('role') != 'ADMIN':
+        st.error("⛔ Accès refusé. Cette section est réservée aux administrateurs.")
     else:
         st.title("⚙️ Dashboard DBA & Audit Logs")
-        
         conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        
-        st.subheader("📋 Logs d'Audit du Système (audit_logs)")
-        df_audit = pd.read_sql("SELECT * FROM vw_audit_trail LIMIT 50;", conn)
-        st.dataframe(df_audit, use_container_width=True)
-        
-        st.subheader("🔑 Connexions Récents (login_logs)")
-        df_login = pd.read_sql("SELECT l.id, u.email, l.login_time FROM login_logs l JOIN users u ON l.user_id = u.id ORDER BY l.login_time DESC LIMIT 20;", conn)
-        st.dataframe(df_login, use_container_width=True)
-        
-        conn.close()
+        if conn:
+            st.subheader("📋 Logs d'Audit du Système (audit_logs)")
+            try:
+                df_audit = pd.read_sql("SELECT * FROM vw_audit_trail LIMIT 50;", conn)
+                st.dataframe(df_audit, use_container_width=True)
+            except Exception:
+                st.info("Vue `vw_audit_trail` non disponible.")
+                
+            st.subheader("🔑 Connexions Récents (login_logs)")
+            try:
+                df_login = pd.read_sql("SELECT l.id, u.email, l.login_time FROM login_logs l JOIN users u ON l.user_id = u.id ORDER BY l.login_time DESC LIMIT 20;", conn)
+                st.dataframe(df_login, use_container_width=True)
+            except Exception:
+                st.info("Table `login_logs` non disponible.")
+            conn.close()
