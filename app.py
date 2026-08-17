@@ -1,9 +1,11 @@
 import streamlit as st
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import pandas as pd
+import plotly.express as px
 
 # ----------------------------------------------------
-# 1. CONFIGURATION DE LA PAGE
+# 1. CONFIGURATION DE LA PAGE & DESIGN CSS
 # ----------------------------------------------------
 st.set_page_config(
     page_title="NEKTA - Réseau Professionnel",
@@ -11,57 +13,84 @@ st.set_page_config(
     layout="wide"
 )
 
+st.markdown("""
+    <style>
+    [data-testid="stSidebar"] { background-color: #0d1117 !important; }
+    [data-testid="stSidebar"] * { color: #ffffff !important; font-weight: 500; }
+    
+    .hero-box { 
+        background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
+        padding: 40px 20px; border-radius: 16px; color: white; text-align: center; margin-bottom: 25px;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+    }
+    
+    .card { 
+        background: #ffffff; padding: 20px; border-radius: 12px; 
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-left: 5px solid #1e3a8a; 
+        margin-bottom: 15px; color: #1e293b;
+    }
+    
+    div[data-testid="stMetric"] { 
+        background: white; padding: 15px; border-radius: 12px; 
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05); border-bottom: 3px solid #1e3a8a; 
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # ----------------------------------------------------
-# 2. CONNEXION À LA BASE DE DONNÉES (NEON)
+# 2. CONNEXION SÉCURISÉE À LA BASE DE DONNÉES (NEON)
 # ----------------------------------------------------
 DB_URL = "postgres://neondb_owner:npg_oJVGs2F6gTlZ@ep-floral-salad-ayegzn7m-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 @st.cache_resource
 def get_db_connection():
     try:
-        return psycopg2.connect(
-            DB_URL,
-            cursor_factory=RealDictCursor
-        )
-    except Exception as e:
-        st.error(f"Erreur de connexion à la base de données : {e}")
+        conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+        conn.autocommit = True
+        return conn
+    except Exception:
         return None
 
 def run_query(query, params=None, fetch="all"):
     conn = get_db_connection()
+    if not conn or conn.closed:
+        st.cache_resource.clear()
+        conn = get_db_connection()
     if not conn:
         return [] if fetch == "all" else None
+    
     try:
         with conn.cursor() as cur:
             cur.execute(query, params or ())
             if fetch == "all":
-                result = cur.fetchall()
+                return cur.fetchall()
             elif fetch == "one":
-                result = cur.fetchone()
-            else:
-                result = None
-        conn.commit()
-        return result
-    except Exception as e:
-        conn.rollback()
-        st.error(f"Erreur d'exécution de la requête : {e}")
+                return cur.fetchone()
+            return None
+    except Exception:
         return [] if fetch == "all" else None
 
 def run_action(query, params=None):
     conn = get_db_connection()
+    if not conn or conn.closed:
+        st.cache_resource.clear()
+        conn = get_db_connection()
     if not conn:
-        return
+        return False
+    
     try:
         with conn.cursor() as cur:
             cur.execute(query, params or ())
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        st.error(f"Erreur lors de la mise à jour des données : {e}")
+        return True
+    except Exception:
+        return False
 
 # ----------------------------------------------------
-# 3. INITIALISATION DE LA SESSION UTILISATEUR
+# 3. INITIALISATION DE LA SESSION & AUTHENTIFICATION
 # ----------------------------------------------------
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+
 if "user_id" not in st.session_state:
     user = run_query("SELECT id FROM users LIMIT 1", fetch="one")
     if user and isinstance(user, dict) and "id" in user:
@@ -81,9 +110,51 @@ if "user_id" not in st.session_state:
         else:
             st.session_state.user_id = 1
 
-current_user = None
-if get_db_connection():
-    current_user = run_query("SELECT id, full_name, email, role FROM users WHERE id = %s", (st.session_state.user_id,), fetch="one")
+# Écran de Connexion / Inscription (Si déconnecté)
+if not st.session_state.auth:
+    st.markdown("<h1 style='text-align:center;'>🇭🇹 NEKTA GATEWAY</h1><p style='text-align:center;'>La plateforme d'excellence professionnelle.</p>", unsafe_allow_html=True)
+    t1, t2 = st.tabs(["🔑 Connexion", "📝 Créer un compte"])
+    
+    with t1:
+        with st.form("login_form"):
+            e = st.text_input("Adresse Email")
+            p = st.text_input("Mot de passe", type="password")
+            if st.form_submit_button("Se connecter"):
+                res = run_query("SELECT id, full_name, role FROM users WHERE email = %s LIMIT 1", (e,), fetch="one")
+                if res and isinstance(res, dict):
+                    st.session_state.user_id = res['id']
+                    st.session_state.auth = True
+                    st.success("Connexion réussie !")
+                    st.rerun()
+                else:
+                    st.error("Utilisateur non trouvé. Utilisez un email valide.")
+                    
+    with t2:
+        with st.form("register_form"):
+            fn = st.text_input("Nom Complet")
+            em = st.text_input("Adresse Email")
+            pw = st.text_input("Mot de passe", type="password")
+            if st.form_submit_button("S'inscrire"):
+                if fn and em:
+                    if run_action("INSERT INTO users (full_name, email, password_hash) VALUES (%s, %s, md5(%s))", (fn, em, pw)):
+                        new_u = run_query("SELECT id FROM users WHERE email = %s", (em,), fetch="one")
+                        if new_u:
+                            run_action("INSERT INTO profiles (user_id, bio) VALUES (%s, %s)", (new_u['id'], f"Profil de {fn}"))
+                        st.success("Compte créé avec succès ! Veuillez vous connecter.")
+                    else:
+                        st.error("Erreur lors de la création du compte.")
+                else:
+                    st.warning("Veuillez remplir tous les champs.")
+    
+    # Bouton d'accès rapide pour démo/test
+    if st.button("🚀 Mode Démo (Accès Direct)"):
+        st.session_state.auth = True
+        st.rerun()
+        
+    st.stop()
+
+# Charger les données de l'utilisateur actuel
+current_user = run_query("SELECT id, full_name, email, role FROM users WHERE id = %s", (st.session_state.user_id,), fetch="one")
 
 # ----------------------------------------------------
 # 4. BARRE DE NAVIGATION (SIDEBAR)
@@ -95,9 +166,13 @@ with st.sidebar:
         st.markdown(f"**Rôle:** {current_user.get('role', 'USER')}")
         st.markdown(f"**ID:** `{current_user.get('id', 'N/A')}`")
     
+    if st.button("🚪 Déconnexion", use_container_width=True):
+        st.session_state.auth = False
+        st.rerun()
+
     st.divider()
 
-    # Selecteur d'utilisateur pour les tests
+    # Sélecteur d'utilisateur pour les tests
     all_users_list = run_query("SELECT id, full_name FROM users")
     if all_users_list:
         user_map = {f"{u['full_name']} (ID: {u['id']})": u['id'] for u in all_users_list}
@@ -178,8 +253,7 @@ def display_profile_card(target_user_id):
 # PAGE 1: ACCUEIL & FEED
 # ----------------------------------------------------
 if page == "Accueil & Feed":
-    st.header("🏠 Bienvenue sur NEKTA")
-    st.info("Le réseau professionnel qui valorise les compétences et sécurise les échanges.")
+    st.markdown('<div class="hero-box"><h1>Bienvenue sur NEKTA</h1><p>Le réseau professionnel qui valorise les compétences et sécurise les échanges.</p></div>', unsafe_allow_html=True)
 
     m1, m2, m3 = st.columns(3)
     total_jobs_res = run_query("SELECT COUNT(*) as cnt FROM jobs", fetch="one")
@@ -219,9 +293,9 @@ if page == "Accueil & Feed":
     )
     if jobs:
         for j in jobs:
-            st.markdown(f"**{j['title']}** | Catégorie: `{j['category']}` | Budget: `${j['budget']}` | Publié par: **{j['full_name']}**")
+            st.markdown(f"<div class='card'><b>{j['title']}</b> | Catégorie: <code>{j['category']}</code> | Budget: <b>${j['budget']}</b><br><small>Publié par: {j['full_name']}</small></div>", unsafe_allow_html=True)
     else:
-        st.write("Aucune opportunité récente pour le moment.")
+        st.info("Aucune opportunité récente pour le moment.")
 
     if "selected_profile" in st.session_state:
         display_profile_card(st.session_state["selected_profile"])
@@ -446,6 +520,8 @@ elif page == "Statistiques (BI)":
     cat_stats = run_query("SELECT category, COUNT(*) as nombre FROM jobs GROUP BY category")
     if cat_stats:
         st.subheader("Répartition des Offres par Catégorie")
-        st.bar_chart(data={item["category"] or "Non spécifiée": item["nombre"] for item in cat_stats})
+        df_cat = pd.DataFrame(cat_stats)
+        fig = px.pie(df_cat, values='nombre', names='category', title="Offres d'Emploi par Catégorie", hole=0.4)
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Pas encore assez de données pour afficher les statistiques.")
