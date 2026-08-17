@@ -5,7 +5,7 @@ import plotly.express as px
 import pandas as pd
 from datetime import datetime
 
-# 1. CONFIGURATION & DESIGN (SIDEBAR NWA, HERO BANNER)
+# 1. CONFIGURATION & DESIGN PREMIUM
 st.set_page_config(page_title="NEKTA | Excellence & Confiance", page_icon="🇭🇹", layout="wide")
 
 st.markdown("""
@@ -19,7 +19,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 2. SISTÈM KONEKSYON (ROBUSTE)
+# 2. SISTÈM KONEKSYON
 DB_URL = "postgres://neondb_owner:npg_oJVGs2F6gTlZ@ep-floral-salad-ayegzn7m-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 @st.cache_resource
@@ -91,27 +91,24 @@ with st.sidebar:
 # 5. PAGES
 if choice == "🏠 Accueil":
     st.markdown('<div class="hero"><h1>Excellence & Confiance</h1><p>La puissance du Cloud SQL au service du talent Haïtien.</p></div>', unsafe_allow_html=True)
-    st.subheader("🔔 Suivi de mes candidatures")
+    st.subheader("🔔 Notifications & Suivi")
     notifs = run_query("SELECT j.title, a.status FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s", (user['id'],))
-    if not notifs: st.info("Aucune activité récente.")
+    if not notifs: st.info("Aucune notification récente.")
     for n in notifs:
         color = "green" if n['status'] == 'ACCEPTED' else "red" if n['status'] == 'REJECTED' else "orange"
-        st.markdown(f"• Mission **{n['title']}** : <b style='color:{color}'>{n['status']}</b>", unsafe_allow_html=True)
+        st.markdown(f"• Statut pour **{n['title']}** : <b style='color:{color}'>{n['status']}</b>", unsafe_allow_html=True)
 
 elif choice == "👥 Talents":
     st.title("👥 Annuaire des Talents")
-    s = st.text_input("Rechercher...")
+    s = st.text_input("Rechercher un expert...")
     talents = run_query("SELECT * FROM vw_talents WHERE full_name ILIKE %s LIMIT 12", (f'%{s}%',))
     cols = st.columns(3)
     for idx, t in enumerate(talents):
         tid = run_query("SELECT id FROM users WHERE full_name = %s LIMIT 1", (t['full_name'],), fetch="one")['id']
         with cols[idx % 3]:
-            st.markdown(f"<div class='card'><b>{t['full_name']}</b><br>Score: {t['trust_score']}%</div>", unsafe_allow_html=True)
-            with st.expander("✉️ Écrire / ⭐ Note"):
-                msg = st.text_area("Message", key=f"m_{tid}")
-                if st.button("Envoyer", key=f"b_{tid}"):
-                    if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (user['id'], tid, msg)):
-                        st.success("Envoyé !")
+            st.markdown(f"<div class='card'><b>{t['full_name']}</b><br>Trust Score: {t['trust_score']}%</div>", unsafe_allow_html=True)
+            if st.button(f"✉️ Écrire à {t['full_name'].split()[0]}", key=f"c_{tid}"):
+                st.info("Allez dans Messagerie pour lui envoyer un message.")
 
 elif choice == "👤 Mon Profil":
     st.title("👤 Mon Profil Personnel")
@@ -126,9 +123,10 @@ elif choice == "👤 Mon Profil":
             st.success("Profil créé !")
 
 elif choice == "💼 Missions":
-    t1, t2 = st.tabs(["📢 Offres", "➕ Publier"])
+    t1, t2, t3 = st.tabs(["📢 Offres Ouvertes", "➕ Publier", "📄 Mes Missions"])
     with t1:
-        jobs = run_query("SELECT * FROM vw_jobs_ouverts LIMIT 15")
+        s_job = st.text_input("🔍 Rechercher une mission (Titre, mot-clé...)")
+        jobs = run_query("SELECT * FROM vw_jobs_ouverts WHERE title ILIKE %s ORDER BY created_at DESC LIMIT 15", (f'%{s_job}%',))
         for j in jobs:
             with st.expander(f"📌 {j['title']} - {j['budget']}$"):
                 if st.button("Postuler", key=f"ap_{j['id']}"):
@@ -139,32 +137,45 @@ elif choice == "💼 Missions":
         with st.form("pj"):
             ti, bu, de = st.text_input("Titre"), st.number_input("Budget"), st.text_area("Description")
             if st.form_submit_button("Lancer l'offre"):
-                if run_action("INSERT INTO jobs (client_id, title, description, budget, status) VALUES (%s, %s, %s, %s, 'OPEN')", (user['id'], ti, de, bu)):
-                    st.success("Mission en ligne !"); st.rerun()
+                if run_action("INSERT INTO jobs (client_id, title, description, budget, status) VALUES (%s, %s, %s, %s, 'OPEN')", (user['id'], ti, bu, de)):
+                    st.success("Mission publiée !"); st.rerun()
+    with t3:
+        st.subheader("Les missions que vous avez publiées")
+        my_posted_jobs = run_query("SELECT title, budget, status, created_at FROM jobs WHERE client_id = %s ORDER BY created_at DESC", (user['id'],))
+        if not my_posted_jobs: st.info("Vous n'avez publié aucune mission.")
+        else: st.dataframe(pd.DataFrame(my_posted_jobs), use_container_width=True)
 
 elif choice == "📑 Candidatures":
     t1, t2 = st.tabs(["Candidatures Envoyées", "Candidats Reçus"])
     with t1:
         st.table(run_query("SELECT j.title, a.status FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s", (user['id'],)))
     with t2:
-        reçus = run_query("SELECT a.id, u.full_name, j.title FROM applications a JOIN jobs j ON a.job_id = j.id JOIN users u ON a.professional_id = u.id WHERE j.client_id = %s AND a.status = 'PENDING'", (user['id'],))
+        reçus = run_query("SELECT a.id, u.full_name, j.title, a.status FROM applications a JOIN jobs j ON a.job_id = j.id JOIN users u ON a.professional_id = u.id WHERE j.client_id = %s AND a.status = 'PENDING'", (user['id'],))
         for r in reçus:
             st.write(f"**{r['full_name']}** -> {r['title']}")
-            if st.button("✅ Accepter", key=f"acc_{r['id']}"):
+            if st.button("✅ Accepter ce candidat", key=f"acc_{r['id']}"):
                 run_action("UPDATE applications SET status = 'ACCEPTED' WHERE id = %s", (r['id'],)); st.rerun()
 
 elif choice == "💬 Messagerie":
-    st.title("💬 Boîte de réception")
-    msgs = run_query("SELECT u.full_name, m.content, m.sender_id, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.receiver_id = %s ORDER BY m.sent_at DESC", (user['id'],))
-    if not msgs: st.info("Aucun message reçu.")
-    for m in msgs:
-        with st.container():
+    t_in, t_new = st.tabs(["📥 Inbox", "✉️ Nouveau message"])
+    with t_in:
+        msgs = run_query("SELECT u.full_name, m.content, m.sender_id, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.receiver_id = %s ORDER BY m.sent_at DESC", (user['id'],))
+        if not msgs: st.info("Aucun message reçu.")
+        for m in msgs:
             st.markdown(f"<div class='card'><b>De: {m['full_name']}</b><p>{m['content']}</p></div>", unsafe_allow_html=True)
             with st.expander("Répondre"):
-                rep = st.text_area("Votre réponse", key=f"r_{m['sender_id']}_{m['sent_at']}")
-                if st.button("Envoyer la réponse", key=f"br_{m['sender_id']}"):
+                rep = st.text_area("Votre réponse", key=f"rep_{m['sender_id']}_{m['sent_at']}")
+                if st.button("Envoyer", key=f"br_{m['sender_id']}"):
                     run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (user['id'], m['sender_id'], rep))
                     st.success("Réponse envoyée !")
+    with t_new:
+        dest_list = run_query("SELECT id, full_name, email FROM users WHERE id != %s ORDER BY full_name LIMIT 100", (user['id'],))
+        dest_map = {f"{d['full_name']} ({d['email']})": d['id'] for d in dest_list}
+        target = st.selectbox("Destinataire", list(dest_map.keys()))
+        txt = st.text_area("Message")
+        if st.button("Envoyer le message"):
+            if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (user['id'], dest_map[target], txt)):
+                st.success("Message envoyé !")
 
 elif choice == "📊 Statistiques":
     st.title("📊 Intelligence des Données")
