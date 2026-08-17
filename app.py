@@ -3,7 +3,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # ----------------------------------------------------
-# 1. CONFIGURATION PAJ LA
+# 1. CONFIGURATION DE LA PAGE
 # ----------------------------------------------------
 st.set_page_config(
     page_title="NEKTA - Réseau Professionnel",
@@ -12,17 +12,19 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------
-# 2. KONEKSYON AK BAZ DE DONE (NEON / POSTGRESQL)
+# 2. CONNEXION À LA BASE DE DONNÉES (NEON)
 # ----------------------------------------------------
+DB_URL = "postgres://neondb_owner:npg_oJVGs2F6gTlZ@ep-floral-salad-ayegzn7m-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require"
+
 @st.cache_resource
 def get_db_connection():
     try:
         return psycopg2.connect(
-            st.secrets["postgres"]["url"],
+            DB_URL,
             cursor_factory=RealDictCursor
         )
     except Exception as e:
-        st.error(f"Erè nan koneksyon ak baz de done a: {e}")
+        st.error(f"Erreur de connexion à la base de données : {e}")
         return None
 
 def run_query(query, params=None, fetch="all"):
@@ -42,7 +44,7 @@ def run_query(query, params=None, fetch="all"):
         return result
     except Exception as e:
         conn.rollback()
-        st.error(f"Erè nan ekzekisyon reket la: {e}")
+        st.error(f"Erreur d'exécution de la requête : {e}")
         return [] if fetch == "all" else None
 
 def run_action(query, params=None):
@@ -55,14 +57,14 @@ def run_action(query, params=None):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        st.error(f"Erè nan modifikasyon done yo: {e}")
+        st.error(f"Erreur lors de la mise à jour des données : {e}")
 
 # ----------------------------------------------------
-# 3. INITIALISATION D'UTILISATEUR (SESSION)
+# 3. INITIALISATION DE LA SESSION UTILISATEUR
 # ----------------------------------------------------
 if "user_id" not in st.session_state:
     user = run_query("SELECT id FROM users LIMIT 1", fetch="one")
-    if user:
+    if user and isinstance(user, dict) and "id" in user:
         st.session_state.user_id = user["id"]
     else:
         run_action(
@@ -70,33 +72,37 @@ if "user_id" not in st.session_state:
             ("Super Admin NEKTA", "admin@nekta.com", "ADMIN")
         )
         new_user = run_query("SELECT id FROM users WHERE email = %s", ("admin@nekta.com",), fetch="one")
-        if new_user:
+        if new_user and isinstance(new_user, dict) and "id" in new_user:
             st.session_state.user_id = new_user["id"]
             run_action(
                 "INSERT INTO profiles (user_id, bio, headline, trust_score, avatar_url) VALUES (%s, %s, %s, %s, %s)",
                 (st.session_state.user_id, "Administrateur principal du réseau NEKTA", "Super Admin", 100.00, "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150")
             )
+        else:
+            st.session_state.user_id = 1
 
-current_user = run_query("SELECT id, full_name, email, role FROM users WHERE id = %s", (st.session_state.user_id,), fetch="one")
+current_user = None
+if get_db_connection():
+    current_user = run_query("SELECT id, full_name, email, role FROM users WHERE id = %s", (st.session_state.user_id,), fetch="one")
 
 # ----------------------------------------------------
-# 4. SIDEBAR NAVIGATION
+# 4. BARRE DE NAVIGATION (SIDEBAR)
 # ----------------------------------------------------
 with st.sidebar:
     st.title("💼 NEKTA")
-    if current_user:
-        st.markdown(f"**Utilisateur:** {current_user['full_name']}")
-        st.markdown(f"**Rôle:** {current_user['role']}")
-        st.markdown(f"**ID:** `{current_user['id']}`")
+    if current_user and isinstance(current_user, dict):
+        st.markdown(f"**Utilisateur:** {current_user.get('full_name', 'N/A')}")
+        st.markdown(f"**Rôle:** {current_user.get('role', 'USER')}")
+        st.markdown(f"**ID:** `{current_user.get('id', 'N/A')}`")
     
     st.divider()
 
-    # Chanje itilizatè pou teste fasilman si gen plizyè
+    # Selecteur d'utilisateur pour les tests
     all_users_list = run_query("SELECT id, full_name FROM users")
     if all_users_list:
         user_map = {f"{u['full_name']} (ID: {u['id']})": u['id'] for u in all_users_list}
-        selected_u = st.selectbox("🔄 Changer d'utilisateur (Test)", list(user_map.keys()))
-        if st.button("Changer le compte"):
+        selected_u = st.selectbox("🔄 Changer de compte (Test)", list(user_map.keys()))
+        if st.button("Basculer vers ce compte"):
             st.session_state.user_id = user_map[selected_u]
             st.rerun()
 
@@ -116,7 +122,7 @@ with st.sidebar:
     )
 
 # ----------------------------------------------------
-# 5. FONKSYON POU AFICHE PROFIL AK INTERACTION (MESAJ & NOT)
+# 5. AFFICHAGE DE PROFIL & INTERACTIONS (MESSAGES ET AVIS)
 # ----------------------------------------------------
 def display_profile_card(target_user_id):
     target = run_query(
@@ -124,14 +130,14 @@ def display_profile_card(target_user_id):
         "FROM users u LEFT JOIN profiles p ON u.id = p.user_id WHERE u.id = %s",
         (target_user_id,), fetch="one"
     )
-    if not target:
+    if not target or not isinstance(target, dict):
         st.error("Profil non trouvé.")
         return
 
     with st.expander(f"👤 Profil complet de : {target['full_name']}", expanded=True):
         col_img, col_info = st.columns([1, 3])
         with col_img:
-            avatar = target['avatar_url'] if target.get('avatar_url') else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
+            avatar = target.get('avatar_url') or "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
             st.image(avatar, width=120)
         with col_info:
             st.subheader(target['full_name'])
@@ -142,11 +148,11 @@ def display_profile_card(target_user_id):
         st.divider()
         col_msg, col_rev = st.columns(2)
 
-        # Voye yon mesaj dirèkteman
+        # Envoi de message direct
         with col_msg:
-            st.markdown("### 💬 Envoyez un Message")
+            st.markdown("### 💬 Envoyer un Message")
             msg_body = st.text_area("Votre message:", key=f"msg_txt_{target_user_id}")
-            if st.button("Envoyer Message", key=f"btn_send_{target_user_id}"):
+            if st.button("Envoyer le Message", key=f"btn_send_{target_user_id}"):
                 if msg_body.strip():
                     run_action(
                         "INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)",
@@ -156,7 +162,7 @@ def display_profile_card(target_user_id):
                 else:
                     st.warning("Le message ne peut pas être vide.")
 
-        # Bay yon nòt dirèkteman
+        # Soumission d'une évaluation
         with col_rev:
             st.markdown("### ⭐ Évaluer ce Profil")
             rating = st.slider("Note (1 à 5)", 1, 5, 5, key=f"rate_{target_user_id}")
@@ -179,8 +185,8 @@ if page == "Accueil & Feed":
     total_jobs_res = run_query("SELECT COUNT(*) as cnt FROM jobs", fetch="one")
     total_users_res = run_query("SELECT COUNT(*) as cnt FROM users", fetch="one")
     
-    total_jobs = total_jobs_res["cnt"] if total_jobs_res else 0
-    total_users = total_users_res["cnt"] if total_users_res else 0
+    total_jobs = total_jobs_res["cnt"] if total_jobs_res and isinstance(total_jobs_res, dict) else 0
+    total_users = total_users_res["cnt"] if total_users_res and isinstance(total_users_res, dict) else 0
 
     m1.metric("Membres Actifs", total_users)
     m2.metric("Opportunités", total_jobs)
@@ -197,7 +203,7 @@ if page == "Accueil & Feed":
         cols = st.columns(len(top_talents))
         for idx, t in enumerate(top_talents):
             with cols[idx]:
-                avatar = t['avatar_url'] if t.get('avatar_url') else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
+                avatar = t.get('avatar_url') or "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
                 st.image(avatar, width=100)
                 st.markdown(f"**{t['full_name']}**")
                 st.caption(f"{t.get('headline') or 'Professionnel'}")
@@ -244,7 +250,7 @@ elif page == "Talents & Services":
         for t in talents:
             col_pic, col1, col2 = st.columns([1, 4, 1])
             with col_pic:
-                avatar = t['avatar_url'] if t.get('avatar_url') else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
+                avatar = t.get('avatar_url') or "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
                 st.image(avatar, width=80)
             with col1:
                 st.markdown(f"### {t['full_name']}")
@@ -364,7 +370,7 @@ elif page == "Mes Candidatures & Offres":
         display_profile_card(st.session_state["selected_profile"])
 
 # ----------------------------------------------------
-# PAGE 5: MESSAGERIE DIRECTE (REPONN MESAJ)
+# PAGE 5: MESSAGERIE DIRECTE
 # ----------------------------------------------------
 elif page == "Messagerie Directe":
     st.header("💬 Messagerie Professionnelle")
