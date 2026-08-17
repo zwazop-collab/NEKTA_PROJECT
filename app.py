@@ -3,7 +3,6 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import plotly.express as px
 import pandas as pd
-from datetime import datetime
 
 # 1. CONFIGURATION & DESIGN PREMIUM
 st.set_page_config(page_title="NEKTA | Excellence & Confiance", page_icon="🇭🇹", layout="wide")
@@ -50,18 +49,15 @@ def run_action(query, params=None):
         return True
     except: return False
 
-# 3. INITIALISATION VARIABLES DE SESSION
+# 3. AUTHENTIFICATION
 if "user" not in st.session_state: st.session_state.user = None
-if "page_choice" not in st.session_state: st.session_state.page_choice = "🏠 Accueil"
-if "msg_target_id" not in st.session_state: st.session_state.msg_target_id = None
 
-# --- AUTHENTIFICATION ---
 if st.session_state.user is None:
     st.markdown("<h1 style='text-align:center;'>🚀 NEKTA GATEWAY</h1>", unsafe_allow_html=True)
     t1, t2 = st.tabs(["🔐 Connexion", "📝 Inscription"])
     with t1:
-        with st.form("l"):
-            e, p = st.text_input("Email"), st.text_input("Mot de passe", type="password")
+        with st.form("login_form"):
+            e, p = st.text_input("Email", key="l_email"), st.text_input("Mot de passe", type="password", key="l_pass")
             if st.form_submit_button("Se connecter", use_container_width=True):
                 u = run_query("SELECT * FROM users WHERE email = %s AND (password_hash = crypt(%s, password_hash) OR password_hash = md5(%s) OR email = 'admin@nekta.ht')", (e, p, p), fetch="one")
                 if u:
@@ -69,7 +65,7 @@ if st.session_state.user is None:
                     st.rerun()
                 else: st.error("Email ou mot de passe incorrect.")
     with t2:
-        with st.form("r"):
+        with st.form("reg_form"):
             fn, em, pw = st.text_input("Nom Complet"), st.text_input("Email"), st.text_input("Mot de passe", type="password")
             ut = st.selectbox("Type", ["STUDENT", "PROFESSIONAL", "BUSINESS"])
             if st.form_submit_button("S'inscrire"):
@@ -81,24 +77,19 @@ if st.session_state.user is None:
 
 # 4. NAVIGATION SIDEBAR
 user = st.session_state.user
-menu = ["🏠 Accueil", "👥 Talents", "👤 Mon Profil", "💼 Missions", "📑 Candidatures", "💬 Messagerie", "📊 Statistiques"]
-if user['role'] == 'ADMIN': menu.append("⚙️ Administration DBA")
-
-# Nou kontwole index radio a pou redireksyon an ka mache
-current_idx = menu.index(st.session_state.page_choice) if st.session_state.page_choice in menu else 0
-
 with st.sidebar:
     st.markdown(f"### 👤 {user['full_name']}")
     st.caption(f"{user['user_type']} | ID: {user['id']}")
     if st.button("Déconnexion 🚪", use_container_width=True):
         st.session_state.clear(); st.rerun()
     st.divider()
-    choice = st.radio("Navigation", menu, index=current_idx)
-    st.session_state.page_choice = choice
+    menu = ["🏠 Accueil", "👥 Talents", "👤 Mon Profil", "💼 Missions", "📑 Candidatures", "💬 Messagerie", "📊 Statistiques"]
+    if user['role'] == 'ADMIN': menu.append("⚙️ Administration DBA")
+    choice = st.sidebar.radio("Navigation", menu)
 
 # 5. PAGES
 if choice == "🏠 Accueil":
-    st.markdown('<div class="hero"><h1>Excellence & Confiance</h1><p>Plateforme professionnelle certifiée par PostgreSQL.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>Excellence & Confiance</h1><p>Gérez votre réputation et vos opportunités professionnelles.</p></div>', unsafe_allow_html=True)
     st.subheader("🔔 Notifications")
     notifs = run_query("SELECT j.title, a.status FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s", (user['id'],))
     if not notifs: st.info("Aucune notification.")
@@ -108,17 +99,19 @@ if choice == "🏠 Accueil":
 
 elif choice == "👥 Talents":
     st.title("👥 Annuaire des Talents")
-    s = st.text_input("🔍 Rechercher un profil...")
+    s = st.text_input("🔍 Rechercher un expert...")
     talents = run_query("SELECT * FROM vw_talents WHERE full_name ILIKE %s LIMIT 12", (f'%{s}%',))
     cols = st.columns(3)
     for idx, t in enumerate(talents):
         tid = run_query("SELECT id FROM users WHERE full_name = %s LIMIT 1", (t['full_name'],), fetch="one")['id']
         with cols[idx % 3]:
             st.markdown(f"<div class='card'><b>{t['full_name']}</b><br>Score: {t['trust_score']}%</div>", unsafe_allow_html=True)
-            if st.button(f"✉️ Contacter {t['full_name'].split()[0]}", key=f"c_{tid}"):
-                st.session_state.msg_target_id = tid
-                st.session_state.page_choice = "💬 Messagerie"
-                st.rerun()
+            # BWAT MESAJ DIRÈK ISIT LA
+            with st.expander(f"✉️ Envoyer un message à {t['full_name'].split()[0]}"):
+                msg_text = st.text_area("Votre message", key=f"msg_area_{tid}")
+                if st.button("Envoyer", key=f"send_btn_{tid}"):
+                    if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (user['id'], tid, msg_text)):
+                        st.success("Message envoyé !")
 
 elif choice == "👤 Mon Profil":
     st.title("👤 Mon Profil")
@@ -129,10 +122,10 @@ elif choice == "👤 Mon Profil":
         st.success("Profil mis à jour !")
 
 elif choice == "💼 Missions":
-    t1, t2, t3 = st.tabs(["📢 Offres", "➕ Publier", "📄 Mes Missions"])
+    t1, t2, t3 = st.tabs(["📢 Offres Ouvertes", "➕ Publier", "📄 Mes Missions"])
     with t1:
         s_job = st.text_input("🔍 Rechercher une mission")
-        jobs = run_query("SELECT * FROM vw_jobs_ouverts WHERE title ILIKE %s ORDER BY created_at DESC", (f'%{s_job}%',))
+        jobs = run_query("SELECT * FROM vw_jobs_ouverts WHERE title ILIKE %s ORDER BY created_at DESC LIMIT 15", (f'%{s_job}%',))
         for j in jobs:
             with st.expander(f"📌 {j['title']} - {j['budget']}$"):
                 if st.button("Postuler", key=f"ap_{j['id']}"):
@@ -141,17 +134,20 @@ elif choice == "💼 Missions":
     with t2:
         with st.form("pj"):
             ti, bu, de = st.text_input("Titre"), st.number_input("Budget"), st.text_area("Description")
-            if st.form_submit_button("Publier"):
-                run_action("INSERT INTO jobs (client_id, title, description, budget, status) VALUES (%s, %s, %s, %s, 'OPEN')", (user['id'], ti, de, bu))
-                st.success("Publiée !")
+            if st.form_submit_button("Lancer l'offre"):
+                run_action("INSERT INTO jobs (client_id, title, description, budget, status) VALUES (%s, %s, %s, %s, 'OPEN')", (user['id'], ti, bu, de))
+                st.success("Mission publiée !"); st.rerun()
     with t3:
-        my_jobs = run_query("SELECT id, title, budget, status FROM jobs WHERE client_id = %s", (user['id'],))
+        st.subheader("Vos publications")
+        # Optimize query for speed
+        my_jobs = run_query("SELECT id, title, budget, status FROM jobs WHERE client_id = %s ORDER BY id DESC LIMIT 50", (user['id'],))
+        if not my_jobs: st.info("Aucune mission publiée.")
         for mj in my_jobs:
             c1, c2 = st.columns([4, 1])
             c1.write(f"**{mj['title']}** ({mj['budget']}$)")
             if c2.button("🗑️ Supprimer", key=f"del_{mj['id']}"):
                 run_action("DELETE FROM jobs WHERE id = %s", (mj['id'],))
-                st.warning("Mission supprimée !"); st.rerun()
+                st.warning("Supprimé !"); st.rerun()
 
 elif choice == "📑 Candidatures":
     t1, t2 = st.tabs(["Candidatures Envoyées", "Candidats Reçus"])
@@ -165,42 +161,26 @@ elif choice == "📑 Candidatures":
                 run_action("UPDATE applications SET status = 'ACCEPTED' WHERE id = %s", (r['id'],)); st.rerun()
 
 elif choice == "💬 Messagerie":
-    st.title("💬 Messagerie Professionnelle")
-    t_in, t_new = st.tabs(["📥 Boîte de réception", "✉️ Nouveau message"])
-    with t_in:
-        msgs = run_query("SELECT u.full_name, m.content, m.sender_id, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.receiver_id = %s ORDER BY m.sent_at DESC", (user['id'],))
-        for m in msgs:
+    st.title("💬 Boîte de réception")
+    msgs = run_query("SELECT u.full_name, m.content, m.sender_id, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.receiver_id = %s ORDER BY m.sent_at DESC", (user['id'],))
+    if not msgs: st.info("Aucun message reçu.")
+    for m in msgs:
+        with st.container():
             st.markdown(f"<div class='card'><b>De: {m['full_name']}</b><p>{m['content']}</p></div>", unsafe_allow_html=True)
             with st.expander("Répondre"):
-                rep = st.text_area("Réponse", key=f"r_{m['sender_id']}_{m['sent_at']}")
-                if st.button("Envoyer", key=f"br_{m['sender_id']}"):
+                rep = st.text_area("Votre réponse", key=f"rep_{m['sender_id']}_{m['sent_at']}")
+                if st.button("Envoyer la réponse", key=f"br_{m['sender_id']}"):
                     run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (user['id'], m['sender_id'], rep))
-                    st.success("Envoyée !")
-    with t_new:
-        dest_list = run_query("SELECT id, full_name, email FROM users WHERE id != %s ORDER BY full_name LIMIT 100", (user['id'],))
-        dest_map = {f"{d['full_name']} ({d['email']})": d['id'] for d in dest_list}
-        
-        # Si w soti nan paj Talents, nou pre-chwazi non moun nan
-        default_val = None
-        if st.session_state.msg_target_id:
-            for k, v in dest_map.items():
-                if v == st.session_state.msg_target_id: default_val = k; break
-        
-        target = st.selectbox("Destinataire", list(dest_map.keys()), index=list(dest_map.keys()).index(default_val) if default_val else 0)
-        txt = st.text_area("Votre message")
-        if st.button("Envoyer le message"):
-            if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (user['id'], dest_map[target], txt)):
-                st.success("Message envoyé !")
-                st.session_state.msg_target_id = None # Reset apre voye
+                    st.success("Réponse envoyée !")
 
 elif choice == "📊 Statistiques":
     df_u = pd.DataFrame(run_query("SELECT user_type, COUNT(*) as n FROM users GROUP BY user_type"))
-    st.plotly_chart(px.pie(df_u, values='n', names='user_type', hole=0.5, title="Acteurs"))
+    st.plotly_chart(px.pie(df_u, values='n', names='user_type', hole=0.5, title="Volume par Acteur"))
 
 elif choice == "⚙️ Administration DBA":
     st.title("⚙️ Contrôle DBA")
-    s = st.text_input("Chercher par Email")
+    s = st.text_input("Email utilisateur")
     res = run_query("SELECT id, full_name, email, role FROM users WHERE email ILIKE %s LIMIT 100", (f'%{s}%',))
     st.dataframe(pd.DataFrame(res), use_container_width=True)
     st.write("### Audit Logs")
-    st.dataframe(pd.DataFrame(run_query("SELECT * FROM audit_logs ORDER BY dat_chanjman DESC LIMIT 100")), use_container_width=True)
+    st.dataframe(pd.DataFrame(run_query("SELECT * FROM vw_audit_trail LIMIT 100")), use_container_width=True)
