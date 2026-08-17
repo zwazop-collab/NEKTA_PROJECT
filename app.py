@@ -3,7 +3,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # ----------------------------------------------------
-# CONFIGURATION PAJ LA
+# 1. CONFIGURATION PAJ LA
 # ----------------------------------------------------
 st.set_page_config(
     page_title="NEKTA - Réseau Professionnel",
@@ -12,39 +12,55 @@ st.set_page_config(
 )
 
 # ----------------------------------------------------
-# KONEKSYON AK BAZ DE DONE (NEON)
+# 2. KONEKSYON AK BAZ DE DONE (NEON / POSTGRESQL)
 # ----------------------------------------------------
 @st.cache_resource
 def get_db_connection():
-    return psycopg2.connect(
-        st.secrets["postgres"]["url"],
-        cursor_factory=RealDictCursor
-    )
+    try:
+        return psycopg2.connect(
+            st.secrets["postgres"]["url"],
+            cursor_factory=RealDictCursor
+        )
+    except Exception as e:
+        st.error(f"Erè nan koneksyon ak baz de done a: {e}")
+        return None
 
 def run_query(query, params=None, fetch="all"):
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(query, params or ())
-        if fetch == "all":
-            result = cur.fetchall()
-        elif fetch == "one":
-            result = cur.fetchone()
-        else:
-            result = None
-    conn.commit()
-    return result
+    if not conn:
+        return [] if fetch == "all" else None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+            if fetch == "all":
+                result = cur.fetchall()
+            elif fetch == "one":
+                result = cur.fetchone()
+            else:
+                result = None
+        conn.commit()
+        return result
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Erè nan ekzekisyon reket la: {e}")
+        return [] if fetch == "all" else None
 
 def run_action(query, params=None):
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(query, params or ())
-    conn.commit()
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params or ())
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Erè nan modifikasyon done yo: {e}")
 
 # ----------------------------------------------------
-# INITIALISATION D'UTILISATEUR (SIMULATION)
+# 3. INITIALISATION D'UTILISATEUR (SESSION)
 # ----------------------------------------------------
 if "user_id" not in st.session_state:
-    # Si pa gen itilizatè nan DB a, n ap kreye youn otomatikman
     user = run_query("SELECT id FROM users LIMIT 1", fetch="one")
     if user:
         st.session_state.user_id = user["id"]
@@ -54,16 +70,17 @@ if "user_id" not in st.session_state:
             ("Super Admin NEKTA", "admin@nekta.com", "ADMIN")
         )
         new_user = run_query("SELECT id FROM users WHERE email = %s", ("admin@nekta.com",), fetch="one")
-        st.session_state.user_id = new_user["id"]
-        run_action(
-            "INSERT INTO profiles (user_id, bio, headline, trust_score) VALUES (%s, %s, %s, %s)",
-            (st.session_state.user_id, "Administrateur principal du réseau NEKTA", "Super Admin", 100.00)
-        )
+        if new_user:
+            st.session_state.user_id = new_user["id"]
+            run_action(
+                "INSERT INTO profiles (user_id, bio, headline, trust_score, avatar_url) VALUES (%s, %s, %s, %s, %s)",
+                (st.session_state.user_id, "Administrateur principal du réseau NEKTA", "Super Admin", 100.00, "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150")
+            )
 
 current_user = run_query("SELECT id, full_name, email, role FROM users WHERE id = %s", (st.session_state.user_id,), fetch="one")
 
 # ----------------------------------------------------
-# SIDEBAR NAVIGATION
+# 4. SIDEBAR NAVIGATION
 # ----------------------------------------------------
 with st.sidebar:
     st.title("💼 NEKTA")
@@ -71,6 +88,18 @@ with st.sidebar:
         st.markdown(f"**Utilisateur:** {current_user['full_name']}")
         st.markdown(f"**Rôle:** {current_user['role']}")
         st.markdown(f"**ID:** `{current_user['id']}`")
+    
+    st.divider()
+
+    # Chanje itilizatè pou teste fasilman si gen plizyè
+    all_users_list = run_query("SELECT id, full_name FROM users")
+    if all_users_list:
+        user_map = {f"{u['full_name']} (ID: {u['id']})": u['id'] for u in all_users_list}
+        selected_u = st.selectbox("🔄 Changer d'utilisateur (Test)", list(user_map.keys()))
+        if st.button("Changer le compte"):
+            st.session_state.user_id = user_map[selected_u]
+            st.rerun()
+
     st.divider()
 
     page = st.radio(
@@ -87,7 +116,7 @@ with st.sidebar:
     )
 
 # ----------------------------------------------------
-# FÈNÈT MODAL / EXPANDER POU PROFIL & INTERACTION
+# 5. FONKSYON POU AFICHE PROFIL AK INTERACTION (MESAJ & NOT)
 # ----------------------------------------------------
 def display_profile_card(target_user_id):
     target = run_query(
@@ -102,20 +131,18 @@ def display_profile_card(target_user_id):
     with st.expander(f"👤 Profil complet de : {target['full_name']}", expanded=True):
         col_img, col_info = st.columns([1, 3])
         with col_img:
-            if target['avatar_url']:
-                st.image(target['avatar_url'], width=120)
-            else:
-                st.image("https://via.placeholder.com/150", width=120)
+            avatar = target['avatar_url'] if target.get('avatar_url') else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
+            st.image(avatar, width=120)
         with col_info:
             st.subheader(target['full_name'])
-            st.write(f"**Titre:** {target['headline'] or 'Non spécifié'}")
-            st.write(f"**Bio:** {target['bio'] or 'Aucune biographie disponible.'}")
-            st.write(f"**Trust Score:** {target['trust_score'] or 50.0}%")
+            st.write(f"**Titre:** {target.get('headline') or 'Non spécifié'}")
+            st.write(f"**Bio:** {target.get('bio') or 'Aucune biographie disponible.'}")
+            st.write(f"**Trust Score:** ⭐ {target.get('trust_score') or 50.0}%")
 
         st.divider()
         col_msg, col_rev = st.columns(2)
 
-        # Voye yon mesaj
+        # Voye yon mesaj dirèkteman
         with col_msg:
             st.markdown("### 💬 Envoyez un Message")
             msg_body = st.text_area("Votre message:", key=f"msg_txt_{target_user_id}")
@@ -129,7 +156,7 @@ def display_profile_card(target_user_id):
                 else:
                     st.warning("Le message ne peut pas être vide.")
 
-        # Bay yon nòt
+        # Bay yon nòt dirèkteman
         with col_rev:
             st.markdown("### ⭐ Évaluer ce Profil")
             rating = st.slider("Note (1 à 5)", 1, 5, 5, key=f"rate_{target_user_id}")
@@ -149,11 +176,35 @@ if page == "Accueil & Feed":
     st.info("Le réseau professionnel qui valorise les compétences et sécurise les échanges.")
 
     m1, m2, m3 = st.columns(3)
-    total_jobs = run_query("SELECT COUNT(*) as cnt FROM jobs", fetch="one")["cnt"]
-    total_users = run_query("SELECT COUNT(*) as cnt FROM users", fetch="one")["cnt"]
+    total_jobs_res = run_query("SELECT COUNT(*) as cnt FROM jobs", fetch="one")
+    total_users_res = run_query("SELECT COUNT(*) as cnt FROM users", fetch="one")
+    
+    total_jobs = total_jobs_res["cnt"] if total_jobs_res else 0
+    total_users = total_users_res["cnt"] if total_users_res else 0
+
     m1.metric("Membres Actifs", total_users)
     m2.metric("Opportunités", total_jobs)
-    m3.metric("Trust Score Moyen", "50.0%")
+    m3.metric("Trust Score Moyen", "85.0%")
+
+    st.divider()
+
+    st.subheader("🌟 Profils à la Une")
+    top_talents = run_query(
+        "SELECT u.id, u.full_name, p.headline, p.avatar_url, p.trust_score "
+        "FROM users u JOIN profiles p ON u.id = p.user_id LIMIT 4"
+    )
+    if top_talents:
+        cols = st.columns(len(top_talents))
+        for idx, t in enumerate(top_talents):
+            with cols[idx]:
+                avatar = t['avatar_url'] if t.get('avatar_url') else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
+                st.image(avatar, width=100)
+                st.markdown(f"**{t['full_name']}**")
+                st.caption(f"{t.get('headline') or 'Professionnel'}")
+                if st.button("Voir Profil", key=f"home_prof_{t['id']}"):
+                    st.session_state["selected_profile"] = t["id"]
+
+    st.divider()
 
     st.subheader("📌 Dernières Opportunités Publiées")
     jobs = run_query(
@@ -166,6 +217,9 @@ if page == "Accueil & Feed":
     else:
         st.write("Aucune opportunité récente pour le moment.")
 
+    if "selected_profile" in st.session_state:
+        display_profile_card(st.session_state["selected_profile"])
+
 # ----------------------------------------------------
 # PAGE 2: TALENTS & SERVICES
 # ----------------------------------------------------
@@ -175,19 +229,27 @@ elif page == "Talents & Services":
     search_term = st.text_input("Rechercher un professionnel par nom, compétence ou biographie...")
     if search_term:
         talents = run_query(
-            "SELECT * FROM vw_talents WHERE full_name ILIKE %s OR bio ILIKE %s",
+            "SELECT u.id as user_id, u.full_name, p.bio, p.trust_score, p.avatar_url "
+            "FROM users u LEFT JOIN profiles p ON u.id = p.user_id "
+            "WHERE u.full_name ILIKE %s OR p.bio ILIKE %s",
             (f"%{search_term}%", f"%{search_term}%")
         )
     else:
-        talents = run_query("SELECT * FROM vw_talents LIMIT 10")
+        talents = run_query(
+            "SELECT u.id as user_id, u.full_name, p.bio, p.trust_score, p.avatar_url "
+            "FROM users u LEFT JOIN profiles p ON u.id = p.user_id LIMIT 10"
+        )
 
     if talents:
         for t in talents:
-            col1, col2 = st.columns([4, 1])
+            col_pic, col1, col2 = st.columns([1, 4, 1])
+            with col_pic:
+                avatar = t['avatar_url'] if t.get('avatar_url') else "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"
+                st.image(avatar, width=80)
             with col1:
                 st.markdown(f"### {t['full_name']}")
-                st.write(f"**Bio:** {t['bio'] or 'Pas de bio'}")
-                st.write(f"**Trust Score:** {t['trust_score']}%")
+                st.write(f"**Bio:** {t.get('bio') or 'Pas de biographie spécifiée.'}")
+                st.write(f"**Trust Score:** ⭐ {t.get('trust_score') or 50.0}%")
             with col2:
                 if st.button("Voir Profil", key=f"view_talent_{t['user_id']}"):
                     st.session_state["selected_profile"] = t["user_id"]
@@ -219,7 +281,7 @@ elif page == "Missions & Opportunités":
                 st.rerun()
 
     st.subheader("Offres disponibles")
-    jobs = run_query("SELECT * FROM vw_jobs_ouverts WHERE status = 'OPEN'")
+    jobs = run_query("SELECT j.id, j.title, j.category, j.budget, j.description, j.user_id as employer_id, u.full_name as employer_name FROM jobs j JOIN users u ON j.user_id = u.id")
     if jobs:
         for job in jobs:
             st.markdown(f"### {job['title']}")
@@ -243,7 +305,7 @@ elif page == "Missions & Opportunités":
         display_profile_card(st.session_state["selected_profile"])
 
 # ----------------------------------------------------
-# PAGE 4: MES CANDIDATURES & OFFRES (AKSEPTE / REFIZE)
+# PAGE 4: MES CANDIDATURES & OFFRES
 # ----------------------------------------------------
 elif page == "Mes Candidatures & Offres":
     st.header("📋 Gestion de vos Candidatures et Offres")
@@ -323,7 +385,7 @@ elif page == "Messagerie Directe":
                 
                 col1, col2 = st.columns([1, 4])
                 with col1:
-                    if st.button("Voir Profil / Répondre", key=f"reply_msg_{msg['id']}"):
+                    if st.button("Répondre / Profil", key=f"reply_msg_{msg['id']}"):
                         st.session_state["selected_profile"] = msg['sender_id']
                 st.divider()
         else:
@@ -354,7 +416,7 @@ elif page == "Messagerie Directe":
 elif page == "Évaluations & Avis":
     st.header("⭐ Évaluations & Avis")
 
-    st.subheader("Mes Avis Réçus")
+    st.subheader("Mes Avis Reçus")
     reviews = run_query(
         "SELECT r.rating, r.comment, r.created_at, u.full_name as evaluator_name "
         "FROM reviews r JOIN users u ON r.evaluator_id = u.id WHERE r.evaluated_id = %s",
@@ -362,7 +424,7 @@ elif page == "Évaluations & Avis":
     )
     if reviews:
         for r in reviews:
-            st.markdown(f"**Par:** {r['evaluator_name']} | **Note:** `{r['rating']}/5`")
+            st.markdown(f"**Par:** {r['evaluator_name']} | **Note:** ⭐ `{r['rating']}/5`")
             st.write(f"*{r['comment']}*")
             st.caption(f"Date: {r['created_at']}")
             st.divider()
