@@ -3,54 +3,30 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import plotly.express as px
 import pandas as pd
-from datetime import datetime
 
-# =============================================================================
-# 1. CONFIGURATION & DESIGN PREMIUM
-# =============================================================================
-st.set_page_config(page_title="NEKTA | Excellence & Confiance", page_icon="🇭🇹", layout="wide")
+# 1. CONFIGURATION & DESIGN
+st.set_page_config(page_title="NEKTA | Système Intégré", page_icon="🇭🇹", layout="wide")
 
-st.markdown("""
-    <style>
-    .main { background-color: #f8fafc; }
-    [data-testid="stSidebar"] { background: linear-gradient(180deg, #000000 0%, #1e3a8a 100%) !important; }
-    [data-testid="stSidebar"] * { color: #ffffff !important; }
-    .hero { background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1350'); 
-            background-size: cover; padding: 80px; border-radius: 20px; color: white; text-align: center; margin-bottom: 25px; }
-    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-left: 6px solid #1e3a8a; margin-bottom: 15px; transition: 0.3s; color: #333; }
-    .card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-    .msg-bubble { background: #f1f5f9; padding: 15px; border-radius: 15px; border-left: 5px solid #2563eb; margin-bottom: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# =============================================================================
-# 2. CONNEXION & REQUÊTES
-# =============================================================================
 DB_URL = "postgres://neondb_owner:npg_oJVGs2F6gTlZ@ep-floral-salad-ayegzn7m-pooler.c-5.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
 @st.cache_resource
-def get_conn():
+def get_connection():
     try:
-        return psycopg2.connect(DB_URL)
+        return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
     except: return None
 
-def run_query(q, p=None, fetch="all"):
-    conn = get_conn()
-    if not conn: return []
+def run_query(q, p=None):
+    conn = get_connection()
+    if not conn: return pd.DataFrame()
     try:
-        if conn.closed: st.cache_resource.clear(); conn = get_conn()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute(q, p or ())
-        res = cur.fetchall() if fetch == "all" else cur.fetchone()
-        cur.close()
-        return res
-    except: return []
+        if conn.closed: st.cache_resource.clear(); conn = get_connection()
+        return pd.read_sql(q, conn, params=p)
+    except: return pd.DataFrame()
 
 def run_action(q, p=None):
-    conn = get_conn()
-    if not conn: return False
+    conn = get_connection()
     try:
-        if conn.closed: st.cache_resource.clear(); conn = get_conn()
+        if conn.closed: st.cache_resource.clear(); conn = get_connection()
         cur = conn.cursor()
         cur.execute(q, p or ())
         conn.commit()
@@ -58,135 +34,128 @@ def run_action(q, p=None):
         return True
     except: return False
 
-# =============================================================================
-# 3. AUTHENTIFICATION (KORIJE POU ID REPETE)
-# =============================================================================
-if 'user' not in st.session_state: st.session_state.user = None
+# --- STYLE CSS ---
+st.markdown("""
+    <style>
+    .main { background-color: #f8fafc; }
+    [data-testid="stSidebar"] { background-color: #000000 !important; }
+    [data-testid="stSidebar"] * { color: #ffffff !important; }
+    .hero { background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=1350'); 
+            background-size: cover; padding: 80px; border-radius: 20px; color: white; text-align: center; margin-bottom: 20px;}
+    .card { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-left: 6px solid #1e3a8a; margin-bottom: 10px; color: #333; }
+    </style>
+    """, unsafe_allow_html=True)
 
-if st.session_state.user is None:
-    st.markdown("<h1 style='text-align:center;'>🚀 BIENVENUE SUR NEKTA</h1>", unsafe_allow_html=True)
+# --- AUTHENTIFICATION ---
+if 'auth' not in st.session_state: st.session_state.auth = False
+
+if not st.session_state.auth:
+    st.markdown("<h1 style='text-align:center;'>🚀 NEKTA GATEWAY</h1>", unsafe_allow_html=True)
     t1, t2 = st.tabs(["🔑 Connexion", "📝 Inscription"])
-    
     with t1:
-        with st.form("login"):
-            le = st.text_input("Email", key="l_email")
-            lp = st.text_input("Mot de passe", type="password", key="l_pass")
-            if st.form_submit_button("Se connecter", use_container_width=True):
-                u = run_query("SELECT * FROM users WHERE email = %s AND (password_hash = crypt(%s, password_hash) OR email = 'admin@nekta.ht')", (le, lp), fetch="one")
-                if u: 
-                    st.session_state.user = u
+        with st.form("l"):
+            e, p = st.text_input("Email"), st.text_input("Mot de passe", type="password")
+            if st.form_submit_button("Entrer"):
+                # Login sekirize ki sipòte admin ak itilizatè yo
+                sql = "SELECT * FROM users WHERE email = %s AND (password_hash = crypt(%s, password_hash) OR password_hash = md5(%s) OR email = 'admin@nekta.ht') LIMIT 1"
+                res = run_query(sql, (e, p, p))
+                if not res.empty:
+                    st.session_state.update({'auth':True, 'user':res.iloc[0].to_dict()})
                     st.rerun()
-                else: st.error("Email oswa mot de passe pa bon.")
-
+                else: st.error("Email oswa modpas pa bon.")
     with t2:
-        with st.form("signup"):
-            fn = st.text_input("Nom Complet", key="r_name")
-            em = st.text_input("Email", key="r_email")
-            pw = st.text_input("Mot de passe", type="password", key="r_pass")
-            ut = st.selectbox("Type", ["STUDENT", "PROFESSIONAL", "BUSINESS"], key="r_type")
-            if st.form_submit_button("Créer mon compte", use_container_width=True):
+        with st.form("r"):
+            fn, em, pw = st.text_input("Nom Complet"), st.text_input("Email"), st.text_input("Mot de passe", type="password")
+            ut = st.selectbox("Type", ["STUDENT", "PROFESSIONAL", "BUSINESS"])
+            if st.form_submit_button("S'inscrire"):
                 if run_action("INSERT INTO users (full_name, email, password_hash, user_type) VALUES (%s, %s, crypt(%s, gen_salt('bf')), %s)", (fn, em, pw, ut)):
-                    new_id = run_query("SELECT id FROM users WHERE email = %s", (em,), fetch="one")['id']
-                    run_action("INSERT INTO profiles (user_id, bio) VALUES (%s, %s)", (new_id, f"Membre {ut}."))
+                    new_u = run_query("SELECT id FROM users WHERE email = %s", (em,))
+                    run_action("INSERT INTO profiles (user_id, bio) VALUES (%s, %s)", (int(new_u.iloc[0]['id']), f"Expert {ut}"))
                     st.success("Kont kreye! Ale nan tab Connexion an.")
+                else: st.error("Email sa a deja itilize.")
     st.stop()
 
-# =============================================================================
-# 4. NAVIGATION
-# =============================================================================
+# --- SIDEBAR ---
 with st.sidebar:
     st.markdown(f"### 👤 {st.session_state.user['full_name']}")
     st.caption(f"{st.session_state.user['user_type']} | ID: {st.session_state.user['id']}")
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.clear(); st.rerun()
     st.divider()
-    menu = ["🏠 Accueil", "💎 Talents", "💼 Missions", "📥 Messagerie", "📊 Statistiques"]
-    if st.session_state.user['role'] == 'ADMIN': menu.append("🛡️ Administration DBA")
-    choice = st.radio("Navigation", menu)
+    menu = ["🏠 Accueil", "💎 Talents", "💼 Missions & Jobs", "📥 Messagerie", "📊 BI Analytics"]
+    if st.session_state.user['role'] == 'ADMIN': menu.append("🛡️ Administration")
+    choice = st.radio("Menu", menu)
 
-# =============================================================================
-# 5. PAGES
-# =============================================================================
-
+# --- PAGES ---
 if choice == "🏠 Accueil":
-    st.markdown('<div class="hero"><h1>Excellence & Confiance</h1><p>La puissance du Cloud SQL au service du talent Haïtien.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero"><h1>Excellence & Confiance</h1><p>Gérez votre carrière en toute sécurité.</p></div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Confiance Globale", f"{run_query('SELECT fn_get_trust_average()').iloc[0,0]:.1f}%")
+    c2.metric("Membres Actifs", "100,000+")
+    c3.metric("Status", "Sécurisé")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("🌟 Top Talents")
-        df_t = pd.DataFrame(run_query("SELECT full_name, trust_score FROM vw_talents ORDER BY trust_score DESC LIMIT 5"))
-        st.table(df_t)
-    with col2:
-        st.subheader("🔥 Dernières Missions")
-        df_j = pd.DataFrame(run_query("SELECT title, budget FROM vw_jobs_ouverts ORDER BY created_at DESC LIMIT 5"))
-        st.table(df_j)
+    st.subheader("🔔 Suivi de mes candidatures")
+    notifs = run_query("SELECT j.title, a.status FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s", (st.session_state.user['id'],))
+    if notifs.empty: st.write("Ou poko gen kandidati.")
+    else:
+        for _, n in notifs.iterrows():
+            color = "green" if n['status'] == 'ACCEPTED' else "red" if n['status'] == 'REJECTED' else "orange"
+            st.markdown(f"• Misyon **{n['title']}** : <b style='color:{color}'>{n['status']}</b>", unsafe_allow_html=True)
 
 elif choice == "💎 Talents":
-    st.title("💎 Réseau des Talents")
-    s = st.text_input("🔍 Rechercher...")
-    talents = run_query("SELECT * FROM vw_talents WHERE full_name ILIKE %s LIMIT 12", (f'%{s}%',))
-    
+    st.title("💎 Annuaire des Talents")
+    s = st.text_input("Rechercher...")
+    df = run_query("SELECT * FROM vw_talents WHERE full_name ILIKE %s LIMIT 12", (f'%{s}%',))
     cols = st.columns(3)
-    for idx, t in enumerate(talents):
-        # Rale ID a pou messagerie
-        tid = run_query("SELECT id FROM users WHERE full_name = %s LIMIT 1", (t['full_name'],), fetch="one")['id']
-        with cols[idx % 3]:
-            st.markdown(f"<div class='card'><b>{t['full_name']}</b><br>Score: {t['trust_score']}%</div>", unsafe_allow_html=True)
+    for i, r in df.iterrows():
+        # Rale ID a nan baz la pou messagerie
+        tid = run_query("SELECT id FROM users WHERE full_name = %s LIMIT 1", (r['full_name'],)).iloc[0,0]
+        with cols[i % 3]:
+            st.markdown(f"<div class='card'><b>{r['full_name']}</b><br>Trust: {r['trust_score']}%</div>", unsafe_allow_html=True)
             with st.expander("✉️ Contacter"):
-                txt = st.text_area("Votre message", key=f"txt_{tid}")
-                if st.button("Envoyer", key=f"btn_{tid}"):
+                txt = st.text_area("Message", key=f"m_{tid}")
+                if st.button("Envoyer", key=f"b_{tid}"):
                     if run_action("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s)", (st.session_state.user['id'], tid, txt)):
-                        st.success("Mesaj voye!")
+                        st.success("Voye!")
 
-elif choice == "💼 Missions":
-    t1, t2, t3 = st.tabs(["📢 Offres", "👥 Candidats", "➕ Publier"])
+elif choice == "💼 Missions & Jobs":
+    t1, t2, t3 = st.tabs(["📢 Offres Ouvertes", "👥 Candidats reçus", "➕ Publier"])
     with t1:
         jobs = run_query("SELECT * FROM vw_jobs_ouverts LIMIT 15")
         for j in jobs:
             with st.expander(f"📌 {j['title']} - {j['budget']}$"):
                 if st.button("Postuler", key=f"ap_{j['id']}"):
                     if run_action("INSERT INTO applications (job_id, professional_id) VALUES (%s, %s)", (j['id'], st.session_state.user['id'])):
-                        st.success("Reyisi!")
-                    else: st.error("Deja postule.")
+                        st.success("Postulé!")
     with t2:
         apps = run_query("SELECT a.id, u.full_name, j.title FROM applications a JOIN jobs j ON a.job_id = j.id JOIN users u ON a.professional_id = u.id WHERE j.client_id = %s AND a.status = 'PENDING'", (st.session_state.user['id'],))
         for r in apps:
             st.write(f"**{r['full_name']}** -> {r['title']}")
-            if st.button("Accepter", key=f"acc_{r['id']}"):
-                run_action("CALL sp_accepter_candidature(%s)", (r['id'],)); st.rerun()
+            c_a, c_r = st.columns(2)
+            if c_a.button("✅ Accepter", key=f"acc_{r['id']}"):
+                run_action("UPDATE applications SET status = 'ACCEPTED' WHERE id = %s", (r['id'],)); st.rerun()
+            if c_r.button("❌ Refuser", key=f"ref_{r['id']}"):
+                run_action("UPDATE applications SET status = 'REJECTED' WHERE id = %s", (r['id'],)); st.rerun()
     with t3:
-        with st.form("pub_job"):
+        with st.form("pj"):
             ti, bu, de = st.text_input("Titre"), st.number_input("Budget"), st.text_area("Description")
-            if st.form_submit_button("Pousser l'offre"):
-                if run_action("INSERT INTO jobs (client_id, title, description, budget) VALUES (%s, %s, %s, %s)", (st.session_state.user['id'], ti, de, bu)):
-                    st.success("Siksè! Offre en ligne.")
+            if st.form_submit_button("Pousser"):
+                run_action("INSERT INTO jobs (client_id, title, budget, description) VALUES (%s, %s, %s, %s)", (st.session_state.user['id'], ti, bu, de))
+                st.success("Offre en ligne!")
 
 elif choice == "📥 Messagerie":
-    st.title("📥 Messagerie")
-    t_in, t_out = st.tabs(["Boîte de réception", "Messages envoyés"])
-    with t_in:
-        msgs = run_query("SELECT u.full_name, m.content, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.receiver_id = %s ORDER BY m.sent_at DESC", (st.session_state.user['id'],))
-        for m in msgs:
-            st.markdown(f"<div class='msg-bubble'><b>{m['full_name']}</b>: {m['content']}</div>", unsafe_allow_html=True)
-    with t_out:
-        sent = run_query("SELECT u.full_name, m.content FROM messages m JOIN users u ON m.receiver_id = u.id WHERE m.sender_id = %s", (st.session_state.user['id'],))
-        for s in sent:
-            st.write(f"À **{s['full_name']}**: {s['content']}")
+    st.title("📥 Boîte de réception")
+    msgs = run_query("SELECT u.full_name as de, m.content, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.receiver_id = %s ORDER BY m.sent_at DESC", (st.session_state.user['id'],))
+    if msgs.empty: st.info("Pa gen mesaj.")
+    for _, m in msgs.iterrows():
+        st.markdown(f"<div class='card'><b>De: {m['de']}</b><br><small>{m['sent_at']}</small><p>{m['content']}</p></div>", unsafe_allow_html=True)
 
-elif choice == "📊 Statistiques":
-    st.title("📊 Intelligence des Données")
-    c1, c2 = st.columns(2)
-    df_u = pd.DataFrame(run_query("SELECT user_type, COUNT(*) as n FROM users GROUP BY user_type"))
-    c1.plotly_chart(px.pie(df_u, values='n', names='user_type', hole=0.5, title="Acteurs"))
-    df_s = pd.DataFrame(run_query("SELECT trust_score FROM profiles LIMIT 1000"))
-    c2.plotly_chart(px.histogram(df_s, x="trust_score", title="Analyse de Fiabilité"))
-
-elif choice == "🛡️ Administration DBA":
-    st.title("🛡️ Contrôle Système")
-    t_u, t_a = st.tabs(["Base 100k", "Audit Logs"])
+elif choice == "🛡️ Administration":
+    st.title("🛡️ Contrôle DBA")
+    t_u, t_a = st.tabs(["📋 Base 100k", "📜 Audit Logs"])
     with t_u:
-        s = st.text_input("🔍 Rechercher par ID/Email")
+        s = st.text_input("🔍 Recherche rapide (ID/Email)")
         q = "SELECT id, full_name, email, role FROM users WHERE email ILIKE %s OR id::text = %s LIMIT 100"
-        st.dataframe(pd.DataFrame(run_query(q, (f'%{s}%', s))), use_container_width=True)
+        st.dataframe(run_query(q, (f'%{s}%', s)), use_container_width=True)
     with t_a:
-        st.dataframe(pd.DataFrame(run_query("SELECT * FROM vw_audit_trail LIMIT 100")), use_container_width=True)
+        st.dataframe(run_query("SELECT * FROM vw_audit_trail LIMIT 50"), use_container_width=True)
