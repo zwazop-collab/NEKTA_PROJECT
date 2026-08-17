@@ -5,7 +5,7 @@ import plotly.express as px
 import pandas as pd
 
 # =============================================================================
-# 1. CONFIGURATION PAGE & STYLES CUSTOM (BLE MAREN & SIDEBAR STYLE)
+# 1. CONFIGURATION PAGE & STYLES CUSTOM
 # =============================================================================
 st.set_page_config(
     page_title="NEKTA - Plateforme de Talents & Missions",
@@ -13,14 +13,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom CSS
 st.markdown("""
     <style>
         .stButton>button {
             border-radius: 8px;
             font-weight: bold;
         }
-        
         .main-header {
             background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
             padding: 40px;
@@ -30,29 +28,12 @@ st.markdown("""
             box-shadow: 0 4px 15px rgba(0,0,0,0.2);
             margin-bottom: 25px;
         }
-        
-        .auth-card {
-            background-color: #f8f9fa;
-            padding: 25px;
-            border-radius: 12px;
-            border-left: 5px solid #1e3c72;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        
-        /* Personnalisation Sidebar nan koulè Ble Maren */
         [data-testid="stSidebar"] {
             background: linear-gradient(180deg, #0f2027 0%, #203a43 100%);
             color: white;
         }
         [data-testid="stSidebar"] * {
             color: white !important;
-        }
-        [data-testid="stSidebar"] .stRadio label {
-            background-color: rgba(255, 255, 255, 0.05);
-            padding: 8px 12px;
-            border-radius: 6px;
-            margin-bottom: 4px;
-            display: block;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -106,8 +87,9 @@ def login_user(email, password):
         conn.close()
         return user
     except Exception as e:
-        st.error(f"⚠️ Erreur lors de l'authentification : {e}")
-        conn.close()
+        st.error(f"⚠️ Erreur d'authentification: {e}")
+        if conn:
+            conn.close()
         return None
 
 def register_user(full_name, email, password, user_type):
@@ -125,16 +107,20 @@ def register_user(full_name, email, password, user_type):
         cur.execute(query, (full_name, email, password, user_type))
         new_user_id = cur.fetchone()[0]
         
-        cur.execute("INSERT INTO profiles (user_id, bio, trust_score) VALUES (%s, %s, %s);", (new_user_id, 'Nouveau membre NEKTA', 50))
-        
+        try:
+            cur.execute("INSERT INTO profiles (user_id, bio, trust_score) VALUES (%s, %s, %s);", (new_user_id, 'Nouveau membre NEKTA', 50))
+        except Exception:
+            pass
+            
         conn.commit()
         cur.close()
         conn.close()
         return True
     except Exception as e:
-        conn.rollback()
-        st.error(f"⚠️ Erreur lors de l'inscription : {e}")
-        conn.close()
+        if conn:
+            conn.rollback()
+            conn.close()
+        st.error(f"⚠️ Erreur lors de l'inscription : {e}. Assurez-vous que l'extension pgcrypto est activée.")
         return False
 
 def logout_user():
@@ -142,7 +128,7 @@ def logout_user():
     st.rerun()
 
 # =============================================================================
-# 4. ÉCRAN VERROUILLAGE / LOGIN AK INSCRIPTION
+# 4. LOGIN AK INSCRIPTION
 # =============================================================================
 if st.session_state.user is None:
     st.markdown("""
@@ -184,16 +170,15 @@ if st.session_state.user is None:
             if st.button("S'inscrire maintenant ✨", use_container_width=True):
                 if reg_name and reg_email and reg_pass:
                     if register_user(reg_name, reg_email, reg_pass, reg_type):
-                        st.success("🎉 Compte créé avec succès ! Vous pouvez maintenant vous connecter dans l'onglet Connexion.")
+                        st.success("🎉 Compte créé avec succès ! Vous pouvez maintenant vous connecter.")
                 else:
-                    st.warning("Veuillez remplir tous les champs du formulaire.")
+                    st.warning("Veuillez remplir tous les champs.")
 
     st.stop()
 
 # =============================================================================
-# 5. APPLICATION PRINCIPALE (MEMBER AREA)
+# 5. APPLICATION PRINCIPALE
 # =============================================================================
-
 st.sidebar.title("💼 NEKTA Platform")
 st.sidebar.write(f"👤 **{st.session_state.user['full_name']}**")
 st.sidebar.caption(f"Rôle: `{st.session_state.user['role']}` | Type: `{st.session_state.user['user_type']}`")
@@ -231,7 +216,6 @@ if choice == "🏠 Accueil":
             <p style="font-size: 1.2em;">La plateforme haïtienne de mise en relation entre étudiants, professionnels et entreprises.</p>
         </div>
     """, unsafe_allow_html=True)
-    st.write("")
     
     conn = get_db_connection()
     if conn:
@@ -267,7 +251,7 @@ if choice == "🏠 Accueil":
                     st.dataframe(df_talents, use_container_width=True)
                 except Exception:
                     conn.rollback()
-                    st.info("Information indisponible (vue `vw_talents` manquante).")
+                    st.info("Information indisponible.")
                 
             with c2:
                 st.subheader("🔥 Dernières Offres De Mission")
@@ -276,13 +260,13 @@ if choice == "🏠 Accueil":
                     st.dataframe(df_jobs, use_container_width=True)
                 except Exception:
                     conn.rollback()
-                    st.info("Information indisponible (vue `vw_jobs_ouverts` manquante).")
+                    st.info("Information indisponible.")
             conn.close()
         except Exception:
-            st.warning("Impossible d'extraire les données d'accueil.")
+            st.warning("Erreur d'affichage de l'accueil.")
 
 # -----------------------------------------------------------------------------
-# PAJ 2: 👥 TALENTS (AVEC CONTACT ET EVALUATION)
+# PAJ 2: 👥 TALENTS
 # -----------------------------------------------------------------------------
 elif choice == "👥 Talents":
     st.title("👥 Annuaire des Talents")
@@ -290,11 +274,7 @@ elif choice == "👥 Talents":
     c_search1, c_search2, c_search3 = st.columns([2, 2, 1])
     search_name = c_search1.text_input("Rechercher par nom")
     search_type = c_search2.selectbox("Type d'utilisateur", ["Tous", "STUDENT", "PROFESSIONAL"])
-    min_trust = c_search3.slider("Trust Score Min", 0, 100, 50)
-    
-    page_size = 10
-    page_number = st.number_input("Page", min_value=1, value=1, step=1)
-    offset = (page_number - 1) * page_size
+    min_trust = c_search3.slider("Trust Score Min", 0, 100, 0)
     
     conn = get_db_connection()
     if conn:
@@ -307,8 +287,7 @@ elif choice == "👥 Talents":
                 query += " AND user_type = %s"
                 params.append(search_type)
                 
-            query += " ORDER BY trust_score DESC LIMIT %s OFFSET %s;"
-            params.extend([page_size, offset])
+            query += " ORDER BY trust_score DESC LIMIT 20;"
             
             cur.execute(query, tuple(params))
             talents = cur.fetchall()
@@ -317,8 +296,8 @@ elif choice == "👥 Talents":
                 for t in talents:
                     with st.container():
                         st.markdown(f"### {t['full_name']} `({t['user_type']})`")
-                        st.caption(f"⭐ **Trust Score:** {t['trust_score']}/100")
-                        st.write(t['bio'] or "Aucune biographie fournie.")
+                        st.caption(f"⭐ **Trust Score:** {t['trust_score'] or 0}/100")
+                        st.write(t['bio'] or "Aucune biographie.")
                         
                         col_btn1, col_btn2 = st.columns([1, 2])
                         with col_btn1:
@@ -328,23 +307,23 @@ elif choice == "👥 Talents":
                                 st.rerun()
                                 
                         with col_btn2:
-                            with st.expander(f"⭐ Evaluer / Donner une note à {t['full_name']}"):
-                                new_score = st.slider("Note (0 à 100)", 0, 100, int(t['trust_score']), key=f"rate_val_{t['user_id']}")
-                                if st.button("Enregistrer la note", key=f"rate_btn_{t['user_id']}"):
+                            with st.expander(f"⭐ Évaluer {t['full_name']}"):
+                                new_score = st.slider("Note (0 à 100)", 0, 100, int(t['trust_score'] or 50), key=f"rate_val_{t['user_id']}")
+                                if st.button("Enregistrer", key=f"rate_btn_{t['user_id']}"):
                                     try:
                                         cur.execute("UPDATE profiles SET trust_score = %s WHERE user_id = %s;", (new_score, t['user_id']))
                                         conn.commit()
-                                        st.success("Note enregistrée avec succès!")
+                                        st.success("Note enregistrée!")
                                         st.rerun()
                                     except Exception as ex:
                                         conn.rollback()
-                                        st.error(f"Erreur lors de la mise à jour: {ex}")
+                                        st.error(f"Erreur: {ex}")
                         st.markdown("---")
             else:
                 st.info("Aucun talent trouvé.")
             conn.close()
-        except Exception:
-            st.warning("⚠️ Impossible de lire les talents. Vérifiez si la vue `vw_talents` existe dans Neon DB.")
+        except Exception as e:
+            st.warning(f"⚠️ Erreur d'accès aux talents: {e}")
 
 # -----------------------------------------------------------------------------
 # PAJ 3: 👤 MON PROFIL
@@ -363,20 +342,18 @@ elif choice == "👤 Mon Profil":
             col_prof1, col_prof2 = st.columns([1, 2])
             with col_prof1:
                 st.metric("Trust Score", f"{profile['trust_score'] if profile and profile.get('trust_score') else 0}/100")
-                st.file_uploader("Upload Foto (JPG/PNG)", type=["jpg", "png"])
-                st.file_uploader("Téléverser CV (PDF)", type=["pdf"])
                 
             with col_prof2:
                 new_name = st.text_input("Nom Complet", value=profile['full_name'] if profile else "")
                 new_bio = st.text_area("Ma Bio / Compétences", value=profile['bio'] if profile and profile.get('bio') else "")
-                if st.button("Mettre à jour le profil"):
+                if st.button("Mettre à jour"):
                     cur.execute("UPDATE users SET full_name = %s WHERE id = %s;", (new_name, u_id))
                     cur.execute("INSERT INTO profiles (user_id, bio, updated_at) VALUES (%s, %s, NOW()) ON CONFLICT (user_id) DO UPDATE SET bio = EXCLUDED.bio, updated_at = NOW();", (u_id, new_bio))
                     conn.commit()
-                    st.success("Profil mis à jour avec succès!")
+                    st.success("Profil mis à jour!")
             conn.close()
         except Exception as e:
-            st.warning(f"⚠️ Erreur lors du chargement du profil: {e}")
+            st.warning(f"⚠️ Erreur profil: {e}")
 
 # -----------------------------------------------------------------------------
 # PAJ 4: 🎯 MISSIONS
@@ -386,7 +363,7 @@ elif choice == "🎯 Missions":
     
     col_f1, col_f2 = st.columns(2)
     min_budget = col_f1.number_input("Budget Minimum ($)", min_value=0, value=0)
-    search_title = col_f2.text_input("Mot clé (titre/description)")
+    search_title = col_f2.text_input("Mot clé")
     
     conn = get_db_connection()
     if conn:
@@ -406,26 +383,26 @@ elif choice == "🎯 Missions":
                     with st.expander(f"📌 {j['title']} — ${j['budget']}"):
                         st.write(f"**Client:** {j['client_name']}")
                         st.write(j['description'])
-                        if st.button("Postuler à cette mission", key=f"app_{j['id']}"):
+                        if st.button("Postuler", key=f"app_{j['id']}"):
                             try:
                                 cur.execute("INSERT INTO applications (job_id, professional_id, applicant_id) VALUES (%s, %s, %s);", (j['id'], st.session_state.user['id'], st.session_state.user['id']))
                                 conn.commit()
                                 st.success("Candidature envoyée !")
                             except Exception:
                                 conn.rollback()
-                                st.error("Erreur lors de la postulation ou vous avez déjà postulé.")
+                                st.error("Déjà postulé ou erreur.")
             else:
-                st.info("Aucune mission ouverte.")
+                st.info("Aucune mission disponible.")
             conn.close()
-        except Exception:
-            st.warning("⚠️ La vue `vw_jobs_ouverts` n'existe pas ou contient une erreur de colonne dans la base Neon DB.")
+        except Exception as e:
+            st.warning(f"⚠️ Erreur lors du chargement des missions: {e}")
 
 # -----------------------------------------------------------------------------
-# PAJ 5: ➕ PUBLIER (DIRECTEN NOUVEL OFF)
+# PAJ 5: ➕ PUBLIER
 # -----------------------------------------------------------------------------
 elif choice == "➕ Publier":
-    st.title("➕ Publier du Contenu")
-    pub_type = st.radio("Que voulez-vous publier ?", ["Nouvelle Mission", "Nouvel Événement / Formation"])
+    st.title("➕ Publier une offre ou un événement")
+    pub_type = st.radio("Type", ["Nouvelle Mission", "Nouvel Événement"])
     
     conn = get_db_connection()
     if conn:
@@ -433,17 +410,17 @@ elif choice == "➕ Publier":
             cur = conn.cursor()
             if pub_type == "Nouvelle Mission":
                 title = st.text_input("Titre de la mission")
-                description = st.text_area("Description détaillée")
+                description = st.text_area("Description")
                 budget = st.number_input("Budget ($)", min_value=10.0, step=10.0)
                 
                 if st.button("Publier la mission"):
                     cur.execute("INSERT INTO jobs (client_id, user_id, title, description, budget, status) VALUES (%s, %s, %s, %s, %s, 'OPEN');", (st.session_state.user['id'], st.session_state.user['id'], title, description, budget))
                     conn.commit()
-                    st.success("Mission publiée avec succès ! Elle est maintenant disponible dans les Nouvelles Offres.")
+                    st.success("Mission publiée !")
                     st.session_state.active_tab = "🎯 Missions"
                     st.rerun()
             else:
-                ev_title = st.text_input("Titre de l'événement / formation")
+                ev_title = st.text_input("Titre de l'événement")
                 ev_desc = st.text_area("Description")
                 ev_type = st.selectbox("Type", ["FORMATION", "WORKSHOP", "NETWORKING"])
                 ev_date = st.date_input("Date")
@@ -454,50 +431,32 @@ elif choice == "➕ Publier":
                     st.success("Événement enregistré!")
             conn.close()
         except Exception as e:
-            st.warning(f"⚠️ Impossible d'enregistrer l'élément: {e}")
+            st.warning(f"⚠️ Erreur: {e}")
 
 # -----------------------------------------------------------------------------
 # PAJ 6: 📑 CANDIDATURES
 # -----------------------------------------------------------------------------
 elif choice == "📑 Candidatures":
     u_id = st.session_state.user['id']
-    st.title("📑 Gestion des Candidatures")
+    st.title("📑 Candidatures")
     
     conn = get_db_connection()
     if conn:
         try:
             cur = conn.cursor(cursor_factory=RealDictCursor)
-            tab1, tab2 = st.tabs(["Mes Candidatures Soumises", "Candidatures Reçues sur Mes Offres"])
-            
-            with tab1:
-                try:
-                    cur.execute("SELECT a.id, j.title, a.status, a.applied_at FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s;", (u_id,))
-                    my_apps = cur.fetchall()
-                    st.dataframe(pd.DataFrame(my_apps), use_container_width=True)
-                except Exception:
-                    conn.rollback()
-                    st.info("Aucune candidature soumise.")
-                
-            with tab2:
-                try:
-                    cur.execute("SELECT a.id AS app_id, j.title, u.full_name AS candidat, a.status FROM applications a JOIN jobs j ON a.job_id = j.id JOIN users u ON a.professional_id = u.id WHERE j.client_id = %s;", (u_id,))
-                    received_apps = cur.fetchall()
-                    for ra in received_apps:
-                        c_a1, c_a2 = st.columns([3, 1])
-                        c_a1.write(f"**{ra['candidat']}** sur *{ra['title']}* (`{ra['status']}`)")
-                except Exception:
-                    conn.rollback()
-                    st.info("Aucune candidature reçue.")
+            cur.execute("SELECT a.id, j.title, a.status, a.applied_at FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.professional_id = %s;", (u_id,))
+            my_apps = cur.fetchall()
+            st.dataframe(pd.DataFrame(my_apps), use_container_width=True)
             conn.close()
-        except Exception as e:
-            st.warning("⚠️ Problème de chargement des candidatures.")
+        except Exception:
+            st.info("Aucune candidature enregistrée.")
 
 # -----------------------------------------------------------------------------
-# PAJ 7: 💬 MESSAGERIE (AMÉLIORÉE AVEC RÉPONSE ET SÉLECTION)
+# PAJ 7: 💬 MESSAGERIE
 # -----------------------------------------------------------------------------
 elif choice == "💬 Messagerie":
     u_id = st.session_state.user['id']
-    st.title("💬 Messagerie Intégrée")
+    st.title("💬 Messagerie")
     
     conn = get_db_connection()
     if conn:
@@ -516,12 +475,8 @@ elif choice == "💬 Messagerie":
                     if target_name in keys:
                         default_idx = keys.index(target_name)
                 
-                selected_recipient = st.selectbox("Sélectionner un destinataire à contacter", list(recipient_map.keys()), index=default_idx)
+                selected_recipient = st.selectbox("Destinataire", list(recipient_map.keys()), index=default_idx)
                 dest_id = recipient_map[selected_recipient]
-                st.session_state.msg_recipient_id = dest_id
-                
-                st.markdown("---")
-                st.subheader(f"💬 Discussion avec {selected_recipient}")
                 
                 cur.execute("SELECT sender_id, content, sent_at FROM messages WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s) ORDER BY sent_at ASC;", (u_id, dest_id, dest_id, u_id))
                 messages_chat = cur.fetchall()
@@ -529,32 +484,25 @@ elif choice == "💬 Messagerie":
                 if messages_chat:
                     for m in messages_chat:
                         sender_label = "Moi" if m['sender_id'] == u_id else selected_recipient
-                        time_str = m['sent_at'].strftime('%H:%M') if m.get('sent_at') else ''
-                        if m['sender_id'] == u_id:
-                            st.markdown(f"**[ {time_str} ] Vous:** {m['content']}")
-                        else:
-                            st.markdown(f"📩 **[ {time_str} ] {sender_label}:** {m['content']}")
+                        st.markdown(f"**{sender_label}:** {m['content']}")
                 else:
-                    st.info("Aucun message échangé pour le moment. Soyez le premier à écrire !")
+                    st.info("Aucun message.")
                     
-                msg_text = st.text_input("Votre message à répondre...")
-                if st.button("Envoyer Message 🚀"):
+                msg_text = st.text_input("Votre message...")
+                if st.button("Envoyer"):
                     if msg_text.strip():
                         cur.execute("INSERT INTO messages (sender_id, receiver_id, content) VALUES (%s, %s, %s);", (u_id, dest_id, msg_text))
                         conn.commit()
                         st.rerun()
-            else:
-                st.info("Aucun utilisateur disponible pour discuter.")
             conn.close()
         except Exception as e:
-            st.warning(f"⚠️ Table `messages` absente ou inaccessible: {e}")
+            st.warning(f"⚠️ Erreur messagerie: {e}")
 
 # -----------------------------------------------------------------------------
-# PAJ 8: 📅 ÉVÉNEMENTS & FORMATIONS
+# PAJ 8: 📅 ÉVÉNEMENTS
 # -----------------------------------------------------------------------------
 elif choice == "📅 Événements & Formations":
-    st.title("📅 Formations & Événements à venir")
-    
+    st.title("📅 Événements")
     conn = get_db_connection()
     if conn:
         try:
@@ -562,78 +510,45 @@ elif choice == "📅 Événements & Formations":
             cur.execute("SELECT * FROM events ORDER BY event_date ASC;")
             events = cur.fetchall()
             conn.close()
-            
             if events:
                 for e in events:
-                    st.subheader(f"[{e.get('event_type', 'EVENT')}] {e.get('title', 'Sans titre')}")
-                    st.caption(f"📅 Date: {e.get('event_date', '')} | Lieu: {e.get('location', 'N/A')}")
+                    st.subheader(e.get('title', 'Sans titre'))
                     st.write(e.get('description', ''))
-                    st.markdown("---")
             else:
-                st.info("Aucun événement répertorié pour le moment.")
+                st.info("Aucun événement répertorié.")
         except Exception:
-            st.warning("⚠️ La table `events` n'existe pas encore dans la base Neon DB.")
+            st.info("Aucun événement répertorié.")
 
 # -----------------------------------------------------------------------------
-# PAJ 9: 📊 STATISTIQUES (PLOTLY EXCLUSIF)
+# PAJ 9: 📊 STATISTIQUES
 # -----------------------------------------------------------------------------
 elif choice == "📊 Statistiques":
-    st.title("📊 Tableaux de Bord analytiques")
-    
+    st.title("📊 Statistiques")
     conn = get_db_connection()
     if conn:
         try:
             df_users = pd.read_sql("SELECT user_type, COUNT(*) as count FROM users GROUP BY user_type;", conn)
-            fig_users = px.pie(df_users, values='count', names='user_type', title="Répartition des Utilisateurs par Catégorie", hole=0.4)
+            fig_users = px.pie(df_users, values='count', names='user_type', title="Utilisateurs par Type")
             st.plotly_chart(fig_users, use_container_width=True)
+            conn.close()
         except Exception:
-            st.warning("Impossible d'afficher le graphique des utilisateurs.")
-            
-        try:
-            df_scores = pd.read_sql("SELECT trust_score FROM profiles;", conn)
-            fig_scores = px.histogram(df_scores, x='trust_score', nbins=20, title="Distribution des Trust Scores", color_discrete_sequence=['#2a5298'])
-            st.plotly_chart(fig_scores, use_container_width=True)
-        except Exception:
-            st.warning("Impossible d'afficher le graphique des Trust Scores (table `profiles` manquante).")
-            
-        conn.close()
+            st.info("Statistiques indisponibles.")
 
 # -----------------------------------------------------------------------------
-# PAJ 10: ⚙️ ADMINISTRATION DBA (RECHERCHE OPTIMISÉE POUR GRAND VOLUME)
+# PAJ 10: ⚙️ ADMINISTRATION DBA
 # -----------------------------------------------------------------------------
 elif choice == "⚙️ Administration DBA":
     if st.session_state.user.get('role') != 'ADMIN':
-        st.error("⛔ Accès refusé. Cette section est réservée aux administrateurs.")
+        st.error("⛔ Accès réservé aux administrateurs.")
     else:
-        st.title("⚙️ Dashboard DBA & Audit Logs")
+        st.title("⚙️ Administration DBA")
         conn = get_db_connection()
         if conn:
-            st.subheader("🔍 Recherche Rapide d'Utilisateur (Optimisé pour 100,000+ Utilisateurs)")
-            search_query = st.text_input("Rechercher un utilisateur par nom ou email (moteur optimisé)", placeholder="Entrez le nom ou l'email...")
-            
+            search_query = st.text_input("Rechercher un utilisateur")
             if search_query:
                 try:
-                    df_search = pd.read_sql(
-                        "SELECT id, full_name, email, role, user_type, created_at FROM users WHERE full_name ILIKE %s OR email ILIKE %s LIMIT 50;", 
-                        conn, 
-                        params=(f"%{search_query}%", f"%{search_query}%")
-                    )
+                    df_search = pd.read_sql("SELECT id, full_name, email, role, user_type FROM users WHERE full_name ILIKE %s OR email ILIKE %s LIMIT 50;", conn, params=(f"%{search_query}%", f"%{search_query}%"))
                     st.dataframe(df_search, use_container_width=True)
-                except Exception as ex_search:
-                    st.error(f"Erreur lors de la recherche: {ex_search}")
-            
-            st.markdown("---")
-            st.subheader("📋 Logs d'Audit du Système (audit_logs)")
-            try:
-                df_audit = pd.read_sql("SELECT * FROM vw_audit_trail LIMIT 50;", conn)
-                st.dataframe(df_audit, use_container_width=True)
-            except Exception:
-                st.info("Vue `vw_audit_trail` non disponible.")
-                
-            st.subheader("🔑 Connexions Récents (login_logs)")
-            try:
-                df_login = pd.read_sql("SELECT l.id, u.email, l.login_time FROM login_logs l JOIN users u ON l.user_id = u.id ORDER BY l.login_time DESC LIMIT 20;", conn)
-                st.dataframe(df_login, use_container_width=True)
-            except Exception:
-                st.info("Table `login_logs` non disponible.")
+                except Exception as ex:
+                    st.error(f"Erreur: {ex}")
             conn.close()
